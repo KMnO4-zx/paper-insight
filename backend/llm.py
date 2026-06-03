@@ -122,6 +122,13 @@ class ArkPlanLLM(BaseLLM):
         self.model = model
         self.client = AsyncOpenAI(api_key=self.api_key or MISSING_API_KEY_PLACEHOLDER, base_url=self.base_url)
 
+class DeepSeekLLM(BaseLLM):
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = "deepseek-v4-flash"):
+        self.api_key = api_key if api_key else settings.llm.deepseek_api_key
+        self.base_url = base_url if base_url else "https://api.deepseek.com"
+        self.model = model
+        self.client = AsyncOpenAI(api_key=self.api_key or MISSING_API_KEY_PLACEHOLDER, base_url=self.base_url)
+
 if __name__ == "__main__":
     import asyncio
 

@@ -269,6 +269,7 @@ def load_app_config() -> AppConfig:
             step_api_key=raw_llm.get("step_api_key"),
             step_base_url=_as_str(raw_llm.get("step_base_url"), LlmConfig.step_base_url),
             arkplan_api_key=raw_llm.get("arkplan_api_key"),
+            deepseek_api_key=raw_llm.get("deepseek_api_key"),
         ),
         paths=PathsConfig(paper_content_cache_dir=raw_paths.get("paper_content_cache_dir")),
         server=ServerConfig(
