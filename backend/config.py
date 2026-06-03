@@ -67,6 +67,7 @@ class LlmConfig:
     step_api_key: str | None = None
     step_base_url: str = "https://api.stepfun.com/v1"
     arkplan_api_key: str | None = None
+    deepseek_api_key: str | None = None
 
 
 @dataclass(frozen=True)

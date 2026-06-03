@@ -197,3 +197,51 @@ export interface HfDailySyncResponse {
   paper_ids: string[];
   analyzable_paper_ids: string[];
 }
+
+export interface AdminLlmModel {
+  id: string;
+  provider_id: string;
+  model_name: string;
+  display_name?: string | null;
+  is_enabled: boolean;
+  source?: 'seed' | 'manual' | 'fetched';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AdminLlmProvider {
+  id: string;
+  provider_key?: string;
+  name: string;
+  base_url: string;
+  has_api_key: boolean;
+  api_key_masked?: string | null;
+  is_active: boolean;
+  is_enabled: boolean;
+  is_builtin: boolean;
+  active_model?: string | null;
+  default_parameters?: Record<string, unknown>;
+  models_fetched_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  models: AdminLlmModel[];
+}
+
+export interface AdminLlmProviderListResponse {
+  providers: AdminLlmProvider[];
+}
+
+export interface AdminLlmFetchModelsResponse {
+  provider: AdminLlmProvider;
+  models: AdminLlmModel[];
+  fetched: number;
+  added: number;
+}
+
+export interface AdminLlmTestResponse {
+  ok: boolean;
+  provider_id: string;
+  provider_name: string;
+  model_name: string;
+  output: string;
+}

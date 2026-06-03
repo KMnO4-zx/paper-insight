@@ -14,6 +14,10 @@ class BackgroundAnalyzer:
 
     async def analyze_paper(self, paper_id: str) -> bool:
         """分析单篇论文，返回是否成功"""
+        if not self.llm.is_configured():
+            logger.warning("LLM 未配置，跳过论文分析: %s", paper_id)
+            return False
+
         max_retries = 3
 
         for attempt in range(max_retries):
@@ -58,6 +62,11 @@ class BackgroundAnalyzer:
 
         while self.running:
             try:
+                if not self.llm.is_configured():
+                    logger.warning("LLM 未配置，跳过本轮后台分析")
+                    await asyncio.sleep(self.check_interval)
+                    continue
+
                 papers = await asyncio.to_thread(get_unanalyzed_papers, limit=10)
 
                 if papers:

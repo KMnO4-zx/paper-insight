@@ -2,6 +2,10 @@ import type {
   AdminInvitationCodeCreateResponse,
   AdminInvitationCodeListResponse,
   AdminInvitationCode,
+  AdminLlmFetchModelsResponse,
+  AdminLlmProvider,
+  AdminLlmProviderListResponse,
+  AdminLlmTestResponse,
   AdminOnlineMetrics,
   AdminUserListResponse,
   AuthResponse,
@@ -250,11 +254,73 @@ export async function fetchAdminUsers(
   page: number,
   search: string,
 ): Promise<AdminUserListResponse> {
-  const params = new URLSearchParams({ page: String(page), limit: '20' });
+  const params = new URLSearchParams({ page: String(page), limit: '10' });
   if (search.trim()) {
     params.set('search', search.trim());
   }
   return apiFetch<AdminUserListResponse>(`/admin/users?${params.toString()}`);
+}
+
+export async function fetchAdminLlmProviders(): Promise<AdminLlmProviderListResponse> {
+  return apiFetch<AdminLlmProviderListResponse>('/admin/llm/providers');
+}
+
+export async function createAdminLlmProvider(payload: {
+  name: string;
+  base_url: string;
+  api_key?: string;
+  models?: string[];
+  active_model?: string;
+}): Promise<AdminLlmProvider> {
+  return apiFetch<AdminLlmProvider>('/admin/llm/providers', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateAdminLlmProvider(
+  providerId: string,
+  payload: {
+    name?: string;
+    base_url?: string;
+    api_key?: string | null;
+    is_enabled?: boolean;
+  },
+): Promise<AdminLlmProvider> {
+  return apiFetch<AdminLlmProvider>(`/admin/llm/providers/${providerId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function addAdminLlmModel(
+  providerId: string,
+  modelName: string,
+): Promise<void> {
+  await apiFetch(`/admin/llm/providers/${providerId}/models`, {
+    method: 'POST',
+    body: JSON.stringify({ model_name: modelName }),
+  });
+}
+
+export async function fetchAdminLlmModels(providerId: string): Promise<AdminLlmFetchModelsResponse> {
+  return apiFetch<AdminLlmFetchModelsResponse>(`/admin/llm/providers/${providerId}/fetch-models`, {
+    method: 'POST',
+  });
+}
+
+export async function setAdminActiveLlm(
+  providerId: string,
+  modelName?: string | null,
+): Promise<AdminLlmProvider> {
+  return apiFetch<AdminLlmProvider>('/admin/llm/active', {
+    method: 'POST',
+    body: JSON.stringify({ provider_id: providerId, model_name: modelName }),
+  });
+}
+
+export async function testAdminActiveLlm(): Promise<AdminLlmTestResponse> {
+  return apiFetch<AdminLlmTestResponse>('/admin/llm/test', { method: 'POST' });
 }
 
 export async function fetchAdminInvitationCodes(): Promise<AdminInvitationCodeListResponse> {

@@ -1,5 +1,7 @@
 import logging
+import re
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Iterator, TypeVar
@@ -57,6 +59,23 @@ def _normalize_feishu_settings_row(row: dict | None) -> dict | None:
         return None
     normalized = dict(row)
     normalized["user_id"] = str(normalized["user_id"])
+    return normalized
+
+
+def _normalize_llm_provider_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    normalized = dict(row)
+    normalized["id"] = str(normalized["id"])
+    return normalized
+
+
+def _normalize_llm_model_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    normalized = dict(row)
+    normalized["id"] = str(normalized["id"])
+    normalized["provider_id"] = str(normalized["provider_id"])
     return normalized
 
 
@@ -857,6 +876,512 @@ def update_invitation_code_max_uses(code_id: str, max_uses: int) -> tuple[dict |
         return _normalize_invitation_code_row(invitation), None
 
     return _run_with_retry(operation, f"update_invitation_code_max_uses:{code_id}")
+
+
+def _normalize_model_names(model_names: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw_name in model_names or []:
+        model_name = str(raw_name or "").strip()
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        normalized.append(model_name)
+    return normalized
+
+
+def _provider_key_from_name(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "custom-provider"
+
+
+def _unique_llm_provider_key(cur: psycopg.Cursor, name: str) -> str:
+    base_key = _provider_key_from_name(name)
+    provider_key = base_key
+    while True:
+        cur.execute("SELECT 1 FROM llm_providers WHERE provider_key = %s", (provider_key,))
+        if not cur.fetchone():
+            return provider_key
+        provider_key = f"{base_key}-{uuid.uuid4().hex[:8]}"
+
+
+def _fetch_llm_models_for_provider(
+    conn: psycopg.Connection,
+    provider_ids: list[uuid.UUID],
+) -> dict[str, list[dict]]:
+    if not provider_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, provider_id, model_name, display_name, is_enabled, source, created_at, updated_at
+            FROM llm_models
+            WHERE provider_id = ANY(%s)
+            ORDER BY model_name
+            """,
+            (provider_ids,),
+        )
+        rows = cur.fetchall()
+
+    models_by_provider: dict[str, list[dict]] = {}
+    for row in rows:
+        model = _normalize_llm_model_row(row)
+        models_by_provider.setdefault(model["provider_id"], []).append(model)
+    return models_by_provider
+
+
+def ensure_default_llm_providers(provider_specs: list[dict]) -> None:
+    def operation() -> None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                for spec in provider_specs:
+                    provider_key = spec["provider_key"]
+                    name = spec["name"].strip()
+                    base_url = spec["base_url"].strip().rstrip("/")
+                    api_key = (spec.get("api_key") or "").strip() or None
+                    active_model = (spec.get("active_model") or "").strip() or None
+                    default_parameters = spec.get("default_parameters") or {}
+
+                    cur.execute(
+                        """
+                        INSERT INTO llm_providers (
+                          provider_key, name, base_url, api_key, is_builtin,
+                          active_model, default_parameters
+                        )
+                        VALUES (%s, %s, %s, %s, TRUE, %s, %s)
+                        ON CONFLICT (provider_key) DO UPDATE SET
+                          name = EXCLUDED.name,
+                          base_url = EXCLUDED.base_url,
+                          api_key = CASE
+                            WHEN COALESCE(llm_providers.api_key, '') = ''
+                              THEN EXCLUDED.api_key
+                            ELSE llm_providers.api_key
+                          END,
+                          is_builtin = TRUE,
+                          active_model = COALESCE(NULLIF(llm_providers.active_model, ''), EXCLUDED.active_model),
+                          default_parameters = EXCLUDED.default_parameters,
+                          updated_at = NOW()
+                        RETURNING id
+                        """,
+                        (
+                            provider_key,
+                            name,
+                            base_url,
+                            api_key,
+                            active_model,
+                            Jsonb(default_parameters),
+                        ),
+                    )
+                    provider_id = cur.fetchone()["id"]
+
+                    for model_name in _normalize_model_names(spec.get("models")):
+                        cur.execute(
+                            """
+                            INSERT INTO llm_models (provider_id, model_name, display_name, source)
+                            VALUES (%s, %s, %s, 'seed')
+                            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                              display_name = COALESCE(llm_models.display_name, EXCLUDED.display_name),
+                              is_enabled = TRUE,
+                              updated_at = NOW()
+                            """,
+                            (provider_id, model_name, model_name),
+                        )
+
+                cur.execute("SELECT id FROM llm_providers WHERE is_active AND is_enabled LIMIT 1")
+                active = cur.fetchone()
+                if not active:
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM llm_providers
+                        WHERE is_enabled
+                        ORDER BY CASE WHEN provider_key = 'step' THEN 0 ELSE 1 END,
+                                 is_builtin DESC,
+                                 name
+                        LIMIT 1
+                        """
+                    )
+                    selected = cur.fetchone()
+                    if selected:
+                        cur.execute("UPDATE llm_providers SET is_active = FALSE WHERE is_active")
+                        cur.execute(
+                            """
+                            UPDATE llm_providers
+                            SET is_active = TRUE, updated_at = NOW()
+                            WHERE id = %s
+                            """,
+                            (selected["id"],),
+                        )
+            conn.commit()
+
+    _run_with_retry(operation, "ensure_default_llm_providers")
+
+
+def list_llm_providers(include_models: bool = True) -> list[dict]:
+    def operation() -> list[dict]:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, provider_key, name, base_url, api_key, is_active, is_enabled,
+                           is_builtin, active_model, default_parameters, models_fetched_at,
+                           created_at, updated_at
+                    FROM llm_providers
+                    ORDER BY is_active DESC, is_builtin DESC, name
+                    """
+                )
+                provider_rows = cur.fetchall()
+
+            provider_ids = [row["id"] for row in provider_rows]
+            models_by_provider = _fetch_llm_models_for_provider(conn, provider_ids) if include_models else {}
+
+        providers = []
+        for row in provider_rows:
+            provider = _normalize_llm_provider_row(row)
+            if include_models:
+                provider["models"] = models_by_provider.get(provider["id"], [])
+            providers.append(provider)
+        return providers
+
+    return _run_with_retry(operation, "list_llm_providers")
+
+
+def get_llm_provider(provider_id: str, include_models: bool = True) -> dict | None:
+    def operation() -> dict | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, provider_key, name, base_url, api_key, is_active, is_enabled,
+                           is_builtin, active_model, default_parameters, models_fetched_at,
+                           created_at, updated_at
+                    FROM llm_providers
+                    WHERE id = %s
+                    """,
+                    (provider_id,),
+                )
+                row = cur.fetchone()
+            if not row:
+                return None
+            provider = _normalize_llm_provider_row(row)
+            if include_models:
+                provider["models"] = _fetch_llm_models_for_provider(conn, [row["id"]]).get(provider["id"], [])
+            return provider
+
+    return _run_with_retry(operation, f"get_llm_provider:{provider_id}")
+
+
+def get_active_llm_config() -> dict | None:
+    def operation() -> dict | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.id, p.provider_key, p.name, p.base_url, p.api_key, p.is_active,
+                           p.is_enabled, p.is_builtin, p.active_model, p.default_parameters,
+                           p.models_fetched_at, p.created_at, p.updated_at,
+                           COALESCE(
+                             NULLIF(p.active_model, ''),
+                             (
+                               SELECT m.model_name
+                               FROM llm_models m
+                               WHERE m.provider_id = p.id AND m.is_enabled
+                               ORDER BY m.created_at
+                               LIMIT 1
+                             )
+                           ) AS model_name
+                    FROM llm_providers p
+                    WHERE p.is_active AND p.is_enabled
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+        return _normalize_llm_provider_row(row)
+
+    return _run_with_retry(operation, "get_active_llm_config")
+
+
+def create_llm_provider(
+    name: str,
+    base_url: str,
+    api_key: str | None,
+    model_names: list[str] | None = None,
+    active_model: str | None = None,
+) -> dict:
+    def operation() -> dict:
+        normalized_models = _normalize_model_names(model_names)
+        selected_model = (active_model or "").strip()
+        if selected_model and selected_model not in normalized_models:
+            normalized_models.insert(0, selected_model)
+        if not selected_model and normalized_models:
+            selected_model = normalized_models[0]
+
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                provider_key = _unique_llm_provider_key(cur, name)
+                cur.execute(
+                    """
+                    INSERT INTO llm_providers (
+                      provider_key, name, base_url, api_key, is_builtin, active_model
+                    )
+                    VALUES (%s, %s, %s, %s, FALSE, %s)
+                    RETURNING id, provider_key, name, base_url, api_key, is_active, is_enabled,
+                              is_builtin, active_model, default_parameters, models_fetched_at,
+                              created_at, updated_at
+                    """,
+                    (
+                        provider_key,
+                        name.strip(),
+                        base_url.strip().rstrip("/"),
+                        (api_key or "").strip() or None,
+                        selected_model or None,
+                    ),
+                )
+                provider_row = cur.fetchone()
+
+                for model_name in normalized_models:
+                    cur.execute(
+                        """
+                        INSERT INTO llm_models (provider_id, model_name, display_name, source)
+                        VALUES (%s, %s, %s, 'manual')
+                        ON CONFLICT (provider_id, model_name) DO NOTHING
+                        """,
+                        (provider_row["id"], model_name, model_name),
+                    )
+            conn.commit()
+
+            provider = _normalize_llm_provider_row(provider_row)
+            provider["models"] = _fetch_llm_models_for_provider(conn, [provider_row["id"]]).get(provider["id"], [])
+            return provider
+
+    return _run_with_retry(operation, f"create_llm_provider:{name}")
+
+
+def update_llm_provider(
+    provider_id: str,
+    name: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    api_key_provided: bool = False,
+    is_enabled: bool | None = None,
+) -> dict | None:
+    def operation() -> dict | None:
+        updates: list[str] = []
+        params: list[object] = []
+
+        if name is not None:
+            updates.append("name = %s")
+            params.append(name.strip())
+        if base_url is not None:
+            updates.append("base_url = %s")
+            params.append(base_url.strip().rstrip("/"))
+        if api_key_provided:
+            updates.append("api_key = %s")
+            params.append((api_key or "").strip() or None)
+        if is_enabled is not None:
+            updates.append("is_enabled = %s")
+            params.append(is_enabled)
+
+        if not updates:
+            return get_llm_provider(provider_id)
+
+        params.append(provider_id)
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE llm_providers
+                    SET {", ".join(updates)}, updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, provider_key, name, base_url, api_key, is_active, is_enabled,
+                              is_builtin, active_model, default_parameters, models_fetched_at,
+                              created_at, updated_at
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if not row:
+            return None
+        return get_llm_provider(str(row["id"]))
+
+    return _run_with_retry(operation, f"update_llm_provider:{provider_id}")
+
+
+def add_llm_model(
+    provider_id: str,
+    model_name: str,
+    display_name: str | None = None,
+    source: str = "manual",
+) -> dict | None:
+    def operation() -> dict | None:
+        normalized_name = model_name.strip()
+        if not normalized_name:
+            return None
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM llm_providers WHERE id = %s", (provider_id,))
+                if not cur.fetchone():
+                    return None
+                cur.execute(
+                    """
+                    INSERT INTO llm_models (provider_id, model_name, display_name, source)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                      display_name = COALESCE(EXCLUDED.display_name, llm_models.display_name),
+                      is_enabled = TRUE,
+                      updated_at = NOW()
+                    RETURNING id, provider_id, model_name, display_name, is_enabled,
+                              source, created_at, updated_at
+                    """,
+                    (provider_id, normalized_name, display_name or normalized_name, source),
+                )
+                model = cur.fetchone()
+                cur.execute(
+                    """
+                    UPDATE llm_providers
+                    SET active_model = COALESCE(NULLIF(active_model, ''), %s),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (normalized_name, provider_id),
+                )
+            conn.commit()
+        return _normalize_llm_model_row(model)
+
+    return _run_with_retry(operation, f"add_llm_model:{provider_id}:{model_name}")
+
+
+def upsert_fetched_llm_models(provider_id: str, model_names: list[str]) -> tuple[list[dict], int]:
+    def operation() -> tuple[list[dict], int]:
+        normalized_models = _normalize_model_names(model_names)
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM llm_providers WHERE id = %s", (provider_id,))
+                if not cur.fetchone():
+                    return [], 0
+
+                cur.execute(
+                    "SELECT model_name FROM llm_models WHERE provider_id = %s",
+                    (provider_id,),
+                )
+                existing = {row["model_name"] for row in cur.fetchall()}
+                added_count = len([name for name in normalized_models if name not in existing])
+
+                for model_name in normalized_models:
+                    cur.execute(
+                        """
+                        INSERT INTO llm_models (provider_id, model_name, display_name, source)
+                        VALUES (%s, %s, %s, 'fetched')
+                        ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                          display_name = COALESCE(llm_models.display_name, EXCLUDED.display_name),
+                          is_enabled = TRUE,
+                          updated_at = NOW()
+                        """,
+                        (provider_id, model_name, model_name),
+                    )
+
+                if normalized_models:
+                    cur.execute(
+                        """
+                        UPDATE llm_providers
+                        SET active_model = COALESCE(NULLIF(active_model, ''), %s),
+                            models_fetched_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (normalized_models[0], provider_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE llm_providers
+                        SET models_fetched_at = NOW(), updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (provider_id,),
+                    )
+
+                cur.execute(
+                    """
+                    SELECT id, provider_id, model_name, display_name, is_enabled, source,
+                           created_at, updated_at
+                    FROM llm_models
+                    WHERE provider_id = %s
+                    ORDER BY model_name
+                    """,
+                    (provider_id,),
+                )
+                rows = cur.fetchall()
+            conn.commit()
+
+        return [_normalize_llm_model_row(row) for row in rows], added_count
+
+    return _run_with_retry(operation, f"upsert_fetched_llm_models:{provider_id}")
+
+
+def set_active_llm_provider(provider_id: str, model_name: str | None = None) -> dict | None:
+    def operation() -> dict | None:
+        selected_model = (model_name or "").strip()
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, is_enabled FROM llm_providers WHERE id = %s",
+                    (provider_id,),
+                )
+                provider = cur.fetchone()
+                if not provider or not provider["is_enabled"]:
+                    return None
+
+                if not selected_model:
+                    cur.execute(
+                        """
+                        SELECT model_name
+                        FROM llm_models
+                        WHERE provider_id = %s AND is_enabled
+                        ORDER BY created_at
+                        LIMIT 1
+                        """,
+                        (provider_id,),
+                    )
+                    model = cur.fetchone()
+                    selected_model = model["model_name"] if model else ""
+
+                if selected_model:
+                    cur.execute(
+                        """
+                        INSERT INTO llm_models (provider_id, model_name, display_name, source)
+                        VALUES (%s, %s, %s, 'manual')
+                        ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                          is_enabled = TRUE,
+                          updated_at = NOW()
+                        """,
+                        (provider_id, selected_model, selected_model),
+                    )
+
+                cur.execute("UPDATE llm_providers SET is_active = FALSE WHERE is_active")
+                cur.execute(
+                    """
+                    UPDATE llm_providers
+                    SET is_active = TRUE,
+                        active_model = NULLIF(%s, ''),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, provider_key, name, base_url, api_key, is_active, is_enabled,
+                              is_builtin, active_model, default_parameters, models_fetched_at,
+                              created_at, updated_at
+                    """,
+                    (selected_model, provider_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+
+        if not row:
+            return None
+        return get_llm_provider(str(row["id"]))
+
+    return _run_with_retry(operation, f"set_active_llm_provider:{provider_id}")
 
 
 def get_paper_marks(user_id: str, paper_ids: list[str]) -> dict[str, dict]:

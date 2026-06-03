@@ -39,7 +39,7 @@ function App() {
     <div className="min-h-screen bg-[#f3f4f6] text-[#172033]">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(255,214,107,0.35),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(125,211,252,0.22),_transparent_28%),linear-gradient(180deg,_#f7f9fc_0%,_#eef2f8_100%)]" />
       <SiteNavbar />
-      <main className="px-4 pb-16 pt-28 sm:px-6 lg:px-8">{content}</main>
+      <main className="px-4 pb-16 pt-40 sm:px-6 sm:pt-28 lg:px-8">{content}</main>
     </div>
   );
 }

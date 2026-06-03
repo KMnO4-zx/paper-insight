@@ -23,6 +23,7 @@ llm:
   open_router_api_key:
   step_api_key:
   arkplan_api_key:
+  deepseek_api_key:
 
 paths:
   paper_content_cache_dir: data/paper_cache

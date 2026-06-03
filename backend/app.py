@@ -24,7 +24,7 @@ from auth import (
     verify_password,
 )
 from config import settings
-from llm import SiliconflowLLM, OpenRouterLLM, StepLLM, ArkPlanLLM
+from llm import ManagedLLM, fetch_openai_compatible_model_names
 from migrations import apply_migrations
 from utils import get_or_cache_paper_content, get_openreview_info, ReaderError, OpenReviewError, truncate_content_for_llm
 from hf_daily import sync_hf_daily_papers
@@ -48,6 +48,8 @@ from database import (
     delete_user,
     delete_last_chat_message_pair,
     ensure_admin_user,
+    ensure_default_llm_providers,
+    add_llm_model,
     get_chat_messages,
     get_chat_session,
     get_chat_sessions_for_account,
@@ -55,6 +57,7 @@ from database import (
     get_hf_daily_papers,
     get_feishu_settings,
     get_paper,
+    get_llm_provider,
     get_paper_marks,
     get_presence_counts,
     get_presence_trend,
@@ -66,6 +69,7 @@ from database import (
     list_invitation_codes,
     list_enabled_feishu_settings,
     list_marked_papers,
+    list_llm_providers,
     list_users,
     migrate_anonymous_data,
     record_presence,
@@ -78,9 +82,13 @@ from database import (
     search_all_papers,
     select_daily_push_papers_for_user,
     set_paper_mark,
+    set_active_llm_provider,
+    create_llm_provider,
     update_feishu_test_result,
     update_llm_response,
     update_invitation_code_max_uses,
+    update_llm_provider,
+    upsert_fetched_llm_models,
     upsert_feishu_settings,
     update_user_admin_fields,
     update_user_last_login,
@@ -93,7 +101,7 @@ from markdown_utils import normalize_llm_markdown
 logger = logging.getLogger(__name__)
 INVITATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
-llm = StepLLM()
+llm = ManagedLLM()
 chat_sessions: dict[str, ChatSession] = {}
 background_analyzer = BackgroundAnalyzer(llm, check_interval=settings.background_analysis.check_interval_seconds)
 background_task = None
@@ -366,9 +374,66 @@ def bootstrap_admin_user() -> None:
     logger.info("初始管理员已确认: %s", normalized)
 
 
+def bootstrap_llm_providers() -> None:
+    ensure_default_llm_providers(
+        [
+            {
+                "provider_key": "step",
+                "name": "Step",
+                "base_url": settings.llm.step_base_url,
+                "api_key": settings.llm.step_api_key,
+                "active_model": "step-3.5-flash-2603",
+                "models": ["step-3.5-flash-2603"],
+            },
+            {
+                "provider_key": "openrouter",
+                "name": "OpenRouter",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": settings.llm.open_router_api_key,
+                "active_model": "stepfun/step-3.5-flash:free",
+                "models": ["stepfun/step-3.5-flash:free"],
+                "default_parameters": {"max_completion_tokens": 12000},
+            },
+            {
+                "provider_key": "siliconflow",
+                "name": "SiliconFlow",
+                "base_url": "https://api.siliconflow.cn/v1",
+                "api_key": settings.llm.siliconflow_api_key,
+                "active_model": "Pro/MiniMaxAI/MiniMax-M2.5",
+                "models": ["Pro/MiniMaxAI/MiniMax-M2.5"],
+            },
+            {
+                "provider_key": "arkplan",
+                "name": "ArkPlan",
+                "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+                "api_key": settings.llm.arkplan_api_key,
+                "active_model": "ark-code-latest",
+                "models": ["ark-code-latest"],
+            },
+            {
+                "provider_key": "openai",
+                "name": "OpenAI",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": settings.llm.openai_api_key,
+                "active_model": "gpt-4.1-mini",
+                "models": ["gpt-4.1-mini"],
+            },
+            {
+                "provider_key": "deepseek",
+                "name": "DeepSeek",
+                "base_url": "https://api.deepseek.com",
+                "api_key": settings.llm.deepseek_api_key,
+                "active_model": "deepseek-chat",
+                "models": ["deepseek-chat", "deepseek-reasoner"],
+            },
+        ]
+    )
+    logger.info("LLM 供应商配置已确认")
+
+
 def ensure_llm_configured() -> None:
     if not llm.is_configured():
-        raise HTTPException(status_code=503, detail="LLM API key is not configured in config.yaml")
+        raise HTTPException(status_code=503, detail="当前 LLM 供应商、模型或 API Key 未配置")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -384,11 +449,14 @@ async def lifespan(app: FastAPI):
     except DatabaseError as exc:
         logger.warning("初始管理员创建失败: %s", exc)
 
-    if settings.background_analysis.enabled and llm.is_configured():
+    try:
+        await asyncio.to_thread(bootstrap_llm_providers)
+    except DatabaseError as exc:
+        logger.warning("LLM 供应商初始化失败: %s", exc)
+
+    if settings.background_analysis.enabled:
         background_task = asyncio.create_task(background_analyzer.run())
         logger.info("后台分析任务已启动")
-    elif settings.background_analysis.enabled:
-        logger.warning("已启用后台分析，但 config.yaml 未配置有效 LLM API key，跳过后台分析")
     else:
         logger.info("后台分析任务未启用")
 
@@ -485,6 +553,31 @@ class FeishuWebhookSettingsRequest(BaseModel):
     enabled: bool = True
 
 
+class LlmProviderCreateRequest(BaseModel):
+    name: str
+    base_url: str
+    api_key: str | None = None
+    models: list[str] = []
+    active_model: str | None = None
+
+
+class LlmProviderUpdateRequest(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    is_enabled: bool | None = None
+
+
+class LlmModelCreateRequest(BaseModel):
+    model_name: str
+    display_name: str | None = None
+
+
+class LlmActiveRequest(BaseModel):
+    provider_id: str
+    model_name: str | None = None
+
+
 def public_user(user: dict) -> dict:
     return {
         "id": user["id"],
@@ -516,6 +609,48 @@ def public_feishu_settings(settings_row: dict | None) -> dict:
         "last_tested_at": settings_row.get("last_tested_at"),
         "last_test_status": settings_row.get("last_test_status"),
         "last_test_error": settings_row.get("last_test_error"),
+    }
+
+
+def mask_api_key(api_key: str | None) -> str | None:
+    if not api_key:
+        return None
+    if len(api_key) <= 8:
+        return "*" * len(api_key)
+    return f"{api_key[:4]}...{api_key[-4:]}"
+
+
+def public_llm_model(model: dict) -> dict:
+    return {
+        "id": model["id"],
+        "provider_id": model["provider_id"],
+        "model_name": model["model_name"],
+        "display_name": model.get("display_name"),
+        "is_enabled": model.get("is_enabled", True),
+        "source": model.get("source"),
+        "created_at": model.get("created_at"),
+        "updated_at": model.get("updated_at"),
+    }
+
+
+def public_llm_provider(provider: dict) -> dict:
+    models = provider.get("models") or []
+    return {
+        "id": provider["id"],
+        "provider_key": provider.get("provider_key"),
+        "name": provider["name"],
+        "base_url": provider["base_url"],
+        "has_api_key": bool(provider.get("api_key")),
+        "api_key_masked": mask_api_key(provider.get("api_key")),
+        "is_active": bool(provider.get("is_active")),
+        "is_enabled": bool(provider.get("is_enabled")),
+        "is_builtin": bool(provider.get("is_builtin")),
+        "active_model": provider.get("active_model"),
+        "default_parameters": provider.get("default_parameters") or {},
+        "models_fetched_at": provider.get("models_fetched_at"),
+        "created_at": provider.get("created_at"),
+        "updated_at": provider.get("updated_at"),
+        "models": [public_llm_model(model) for model in models],
     }
 
 
@@ -895,11 +1030,143 @@ async def admin_sync_hf_daily_papers(admin: dict = Depends(require_admin_user)):
         raise HTTPException(status_code=502, detail="HF Daily Papers sync failed") from exc
 
 
+@app.get("/admin/llm/providers")
+async def admin_list_llm_providers(admin: dict = Depends(require_admin_user)):
+    try:
+        providers = list_llm_providers()
+        return {"providers": [public_llm_provider(provider) for provider in providers]}
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.post("/admin/llm/providers")
+async def admin_create_llm_provider(
+    req: LlmProviderCreateRequest,
+    admin: dict = Depends(require_admin_user),
+):
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="供应商名称不能为空")
+    if not req.base_url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Base URL 必须以 http:// 或 https:// 开头")
+    try:
+        provider = create_llm_provider(
+            req.name,
+            req.base_url,
+            req.api_key,
+            req.models,
+            req.active_model,
+        )
+        return public_llm_provider(provider)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.patch("/admin/llm/providers/{provider_id}")
+async def admin_update_llm_provider(
+    provider_id: str,
+    req: LlmProviderUpdateRequest,
+    admin: dict = Depends(require_admin_user),
+):
+    if req.name is not None and not req.name.strip():
+        raise HTTPException(status_code=400, detail="供应商名称不能为空")
+    if req.base_url is not None and not req.base_url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Base URL 必须以 http:// 或 https:// 开头")
+
+    fields_set = getattr(req, "model_fields_set", set())
+    try:
+        provider = update_llm_provider(
+            provider_id,
+            name=req.name,
+            base_url=req.base_url,
+            api_key=req.api_key,
+            api_key_provided="api_key" in fields_set,
+            is_enabled=req.is_enabled,
+        )
+        if not provider:
+            raise HTTPException(status_code=404, detail="供应商不存在")
+        return public_llm_provider(provider)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.post("/admin/llm/providers/{provider_id}/models")
+async def admin_add_llm_model(
+    provider_id: str,
+    req: LlmModelCreateRequest,
+    admin: dict = Depends(require_admin_user),
+):
+    if not req.model_name.strip():
+        raise HTTPException(status_code=400, detail="模型名称不能为空")
+    try:
+        model = add_llm_model(provider_id, req.model_name, req.display_name)
+        if not model:
+            raise HTTPException(status_code=404, detail="供应商不存在")
+        return public_llm_model(model)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.post("/admin/llm/providers/{provider_id}/fetch-models")
+async def admin_fetch_llm_models(
+    provider_id: str,
+    admin: dict = Depends(require_admin_user),
+):
+    try:
+        provider = get_llm_provider(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="供应商不存在")
+        model_names = await fetch_openai_compatible_model_names(
+            provider["base_url"],
+            provider.get("api_key"),
+        )
+        models, added_count = upsert_fetched_llm_models(provider_id, model_names)
+        refreshed = get_llm_provider(provider_id)
+        return {
+            "provider": public_llm_provider(refreshed),
+            "models": [public_llm_model(model) for model in models],
+            "fetched": len(model_names),
+            "added": added_count,
+        }
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("获取 LLM 模型列表失败: %s", exc)
+        raise HTTPException(status_code=502, detail=f"获取模型列表失败: {exc}") from exc
+
+
+@app.post("/admin/llm/active")
+async def admin_set_active_llm(
+    req: LlmActiveRequest,
+    admin: dict = Depends(require_admin_user),
+):
+    try:
+        provider = set_active_llm_provider(req.provider_id, req.model_name)
+        if not provider:
+            raise HTTPException(status_code=404, detail="供应商不存在或已停用")
+        return public_llm_provider(provider)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.post("/admin/llm/test")
+async def admin_test_active_llm(admin: dict = Depends(require_admin_user)):
+    try:
+        result = await llm.test_one_token()
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("LLM 一键测试失败: %s", exc)
+        raise HTTPException(status_code=502, detail=f"模型测试失败: {exc}") from exc
+
+
 @app.get("/admin/users")
 async def admin_list_users(
     search: str = "",
     page: int = 1,
-    limit: int = 20,
+    limit: int = 10,
     admin: dict = Depends(require_admin_user),
 ):
     safe_page = max(page, 1)
