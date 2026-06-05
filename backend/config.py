@@ -11,13 +11,16 @@ CONFIG_PATH = REPO_ROOT / "config.yaml"
 
 @dataclass(frozen=True)
 class AuthConfig:
-    public_registration_enabled: bool = True
     require_email_verification: bool = False
     session_cookie_name: str = "paper_session"
     session_ttl_days: int = 30
     cookie_secure: bool = False
     cookie_samesite: str = "lax"
     password_min_length: int = 8
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+    github_callback_url: str | None = None
+    frontend_base_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -158,10 +161,6 @@ def load_app_config() -> AppConfig:
 
     default_auth = AuthConfig()
     auth = AuthConfig(
-        public_registration_enabled=_as_bool(
-            raw_auth.get("public_registration_enabled"),
-            default_auth.public_registration_enabled,
-        ),
         require_email_verification=_as_bool(
             raw_auth.get("require_email_verification"),
             default_auth.require_email_verification,
@@ -185,6 +184,13 @@ def load_app_config() -> AppConfig:
         password_min_length=_as_int(
             raw_auth.get("password_min_length"),
             default_auth.password_min_length,
+        ),
+        github_client_id=raw_auth.get("github_client_id"),
+        github_client_secret=raw_auth.get("github_client_secret"),
+        github_callback_url=raw_auth.get("github_callback_url"),
+        frontend_base_url=_as_str(
+            raw_auth.get("frontend_base_url"),
+            default_auth.frontend_base_url,
         ),
     )
 

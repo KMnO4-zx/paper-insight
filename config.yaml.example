@@ -29,13 +29,19 @@ paths:
   paper_content_cache_dir: data/paper_cache
 
 auth:
-  public_registration_enabled: true
   require_email_verification: false
   session_cookie_name: paper_session
   session_ttl_days: 30
   cookie_secure: false
   cookie_samesite: lax
   password_min_length: 8
+  # GitHub OAuth App settings. For local development, configure the OAuth
+  # callback URL in GitHub as:
+  # http://127.0.0.1:8000/auth/github/callback
+  github_client_id:
+  github_client_secret:
+  github_callback_url: http://127.0.0.1:8000/auth/github/callback
+  frontend_base_url: http://127.0.0.1:5173
 
 presence:
   online_timeout_seconds: 30

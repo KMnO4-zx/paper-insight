@@ -1,7 +1,4 @@
 import type {
-  AdminInvitationCodeCreateResponse,
-  AdminInvitationCodeListResponse,
-  AdminInvitationCode,
   AdminLlmFetchModelsResponse,
   AdminLlmProvider,
   AdminLlmProviderListResponse,
@@ -31,6 +28,15 @@ const DEV_API_BASE =
     : `${window.location.protocol}//${window.location.hostname}:8000`;
 
 const API_BASE = import.meta.env.DEV ? DEV_API_BASE : '';
+
+export function apiUrl(path: string): string {
+  return path.startsWith('/') ? `${API_BASE}${path}` : path;
+}
+
+export function githubAuthUrl(nextPath = '/'): string {
+  const params = new URLSearchParams({ next: nextPath });
+  return apiUrl(`/auth/github/start?${params.toString()}`);
+}
 
 interface StreamOptions {
   onChunk?: (chunk: string) => void;
@@ -73,7 +79,7 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 async function apiRequest(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const request = typeof input === 'string' && input.startsWith('/') ? `${API_BASE}${input}` : input;
+  const request = typeof input === 'string' ? apiUrl(input) : input;
   return fetch(request, {
     credentials: 'include',
     ...init,
@@ -146,13 +152,6 @@ export async function sendHeartbeat(clientId: string): Promise<void> {
   await apiFetch<{ status: string }>('/online/heartbeat', {
     method: 'POST',
     body: JSON.stringify({ client_id: clientId }),
-  });
-}
-
-export async function register(email: string, password: string, invitationCode: string): Promise<AuthResponse> {
-  return apiFetch<AuthResponse>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ email, password, invitation_code: invitationCode }),
   });
 }
 
@@ -323,33 +322,6 @@ export async function testAdminActiveLlm(): Promise<AdminLlmTestResponse> {
   return apiFetch<AdminLlmTestResponse>('/admin/llm/test', { method: 'POST' });
 }
 
-export async function fetchAdminInvitationCodes(): Promise<AdminInvitationCodeListResponse> {
-  return apiFetch<AdminInvitationCodeListResponse>('/admin/invitation-codes');
-}
-
-export async function createAdminInvitationCode(
-  maxUses: number,
-): Promise<AdminInvitationCodeCreateResponse> {
-  return apiFetch<AdminInvitationCodeCreateResponse>('/admin/invitation-codes', {
-    method: 'POST',
-    body: JSON.stringify({ max_uses: maxUses }),
-  });
-}
-
-export async function updateAdminInvitationCodeMaxUses(
-  codeId: string,
-  maxUses: number,
-): Promise<AdminInvitationCode> {
-  return apiFetch<AdminInvitationCode>(`/admin/invitation-codes/${codeId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ max_uses: maxUses }),
-  });
-}
-
-export async function deleteAdminInvitationCode(codeId: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/admin/invitation-codes/${codeId}`, { method: 'DELETE' });
-}
-
 export async function updateAdminUser(
   userId: string,
   patch: { role?: 'user' | 'admin'; is_active?: boolean },
@@ -402,7 +374,7 @@ export async function streamSse(
   init: RequestInit,
   handlers: StreamOptions,
 ): Promise<void> {
-  const request = typeof input === 'string' && input.startsWith('/') ? `${API_BASE}${input}` : input;
+  const request = typeof input === 'string' ? apiUrl(input) : input;
   const response = await fetch(request, { credentials: 'include', ...init });
   if (!response.ok) {
     throw new Error(response.statusText || 'Stream request failed');

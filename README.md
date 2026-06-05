@@ -17,8 +17,6 @@
 
 ***&emsp;&emsp;可访问 https://paper-insight.herobase.tech 在线体验，或按照以下步骤在本地部署。***
 
-> *注：可使用邀请码`PI-ZUWP-SA53-BP3N-PSWY`注册本人部署的在线服务～*
-
 &emsp;&emsp;已支持：[ICLR 2026](https://paper-insight.herobase.tech/conference/iclr_2026), [NeurIPS 2025](https://paper-insight.herobase.tech/conference/neurips_2025), [ICML 2025](https://paper-insight.herobase.tech/conference/icml_2025)
 
 &emsp;&emsp;额外论文来源：[Hugging Face Daily Papers](https://paper-insight.herobase.tech/hf-daily)。系统可以定时抓取 Hugging Face Daily Papers，按点赞数选择热门论文入库、自动去重，并进入 AI 分析队列。
@@ -68,8 +66,8 @@
 - **重新生成**：支持重新生成最后一条回复
 
 ### 👤 账号与个人论文库
-- **邮箱账号**：支持邮箱密码注册 / 登录，登录态使用 HTTP-only Cookie 保存
-- **邀请码注册**：新用户注册需要管理员生成的邀请码
+- **GitHub 注册**：新用户仅通过 GitHub OAuth 创建账号
+- **兼容旧账号登录**：已存在的邮箱密码账号仍可继续登录，登录态使用 HTTP-only Cookie 保存
 - **数据库行为记录**：看过、点赞状态写入 PostgreSQL，便于后续推荐系统使用
 - **我的论文**：展示用户看过 / 点赞过的论文，支持按最近看过、最近点赞、最近操作、收藏优先、标题排序
 - **聊天归属**：论文对话历史绑定到登录账号
@@ -77,7 +75,6 @@
 ### 🛠️ 管理员后台
 - **在线指标**：展示当前在线人数和历史在线趋势
 - **用户管理**：查看用户列表、启用 / 停用账号、重置用户密码，并支持二次确认后删除用户
-- **邀请码管理**：生成可设置使用次数的邀请码，后续仍可查看完整邀请码，也可删除邀请码
 - **管理员密码**：支持在后台修改当前管理员密码
 - **HF Daily 同步**：支持在后台手动触发 Hugging Face Daily Papers 同步
 
@@ -136,7 +133,10 @@ admin:
   initial_password: change-this-admin-password
 
 auth:
-  public_registration_enabled: true
+  github_client_id: your_github_oauth_client_id
+  github_client_secret: your_github_oauth_client_secret
+  github_callback_url: http://127.0.0.1:8000/auth/github/callback
+  frontend_base_url: http://127.0.0.1:5173
 
 hf_daily:
   enabled: true

@@ -3,10 +3,10 @@ import type { ReactNode } from 'react';
 
 import {
   fetchMe,
+  githubAuthUrl,
   login as loginRequest,
   logout as logoutRequest,
   migrateAnonymousData,
-  register as registerRequest,
 } from '@/lib/api';
 import { AuthContext, type AuthContextValue } from '@/lib/auth';
 import { clearPaperMarks, getAllPaperMarks, getUserId } from '@/lib/storage';
@@ -31,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const payload = await fetchMe();
       setUser(payload.user);
+      await migrateLegacyLocalData();
     } catch {
       setUser(null);
     }
@@ -48,10 +49,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(payload.user);
       await migrateLegacyLocalData();
     },
-    register: async (email: string, password: string, invitationCode: string) => {
-      const payload = await registerRequest(email, password, invitationCode);
-      setUser(payload.user);
-      await migrateLegacyLocalData();
+    loginWithGithub: (nextPath = '/') => {
+      window.location.href = githubAuthUrl(nextPath);
     },
     logout: async () => {
       await logoutRequest();

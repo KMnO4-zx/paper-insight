@@ -6,7 +6,7 @@ export interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, invitationCode: string) => Promise<void>;
+  loginWithGithub: (nextPath?: string) => void;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }

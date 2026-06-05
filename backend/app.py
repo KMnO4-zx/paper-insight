@@ -5,12 +5,13 @@ import secrets
 from pathlib import Path
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from contextlib import asynccontextmanager
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sse_starlette.sse import EventSourceResponse
 
 from pydantic import BaseModel
@@ -26,6 +27,12 @@ from auth import (
 from config import settings
 from llm import ManagedLLM, fetch_openai_compatible_model_names
 from migrations import apply_migrations
+from github_oauth import (
+    GITHUB_AUTHORIZE_URL,
+    GithubOAuthError,
+    exchange_github_code,
+    fetch_github_oauth_user,
+)
 from utils import get_or_cache_paper_content, get_openreview_info, ReaderError, OpenReviewError, truncate_content_for_llm
 from hf_daily import sync_hf_daily_papers
 from feishu import (
@@ -40,11 +47,9 @@ from database import (
     DatabaseError,
     count_active_admins,
     create_chat_session,
-    create_invitation_code,
+    create_or_link_github_user,
     create_user_session,
-    create_user_with_invitation,
     delete_chat_session,
-    delete_invitation_code,
     delete_user,
     delete_last_chat_message_pair,
     ensure_admin_user,
@@ -66,7 +71,6 @@ from database import (
     get_user_by_session_token_hash,
     has_hf_daily_papers_for_date,
     has_successful_feishu_push,
-    list_invitation_codes,
     list_enabled_feishu_settings,
     list_marked_papers,
     list_llm_providers,
@@ -86,7 +90,6 @@ from database import (
     create_llm_provider,
     update_feishu_test_result,
     update_llm_response,
-    update_invitation_code_max_uses,
     update_llm_provider,
     upsert_fetched_llm_models,
     upsert_feishu_settings,
@@ -99,7 +102,9 @@ from background_tasks import BackgroundAnalyzer
 from markdown_utils import normalize_llm_markdown
 
 logger = logging.getLogger(__name__)
-INVITATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+GITHUB_OAUTH_STATE_COOKIE = "paper_github_oauth_state"
+GITHUB_OAUTH_NEXT_COOKIE = "paper_github_oauth_next"
+GITHUB_OAUTH_COOKIE_MAX_AGE_SECONDS = 600
 
 llm = ManagedLLM()
 chat_sessions: dict[str, ChatSession] = {}
@@ -505,10 +510,6 @@ class AuthRequest(BaseModel):
     password: str
 
 
-class RegisterRequest(AuthRequest):
-    invitation_code: str | None = None
-
-
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -537,14 +538,6 @@ class AdminUserUpdateRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     password: str
-
-
-class InvitationCodeCreateRequest(BaseModel):
-    max_uses: int = 1
-
-
-class InvitationCodeUpdateRequest(BaseModel):
-    max_uses: int
 
 
 class FeishuWebhookSettingsRequest(BaseModel):
@@ -666,18 +659,6 @@ def validate_email_and_password(email: str, password: str) -> str:
     return normalized
 
 
-def normalize_invitation_code(code: str | None) -> str:
-    return (code or "").strip().upper()
-
-
-def generate_invitation_code() -> str:
-    groups = [
-        "".join(secrets.choice(INVITATION_CODE_ALPHABET) for _ in range(4))
-        for _ in range(4)
-    ]
-    return f"PI-{'-'.join(groups)}"
-
-
 def get_request_ip(request: Request) -> str | None:
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
@@ -749,6 +730,66 @@ def create_login_session(user: dict, request: Request, response: Response) -> No
     update_user_last_login(user["id"])
 
 
+def sanitize_frontend_path(value: str | None) -> str:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
+
+
+def build_frontend_redirect(path: str = "/", params: dict[str, str] | None = None) -> str:
+    safe_path = sanitize_frontend_path(path)
+    if params:
+        separator = "&" if "?" in safe_path else "?"
+        safe_path = f"{safe_path}{separator}{urlencode(params)}"
+    frontend_base_url = (settings.auth.frontend_base_url or "").strip().rstrip("/")
+    if not frontend_base_url:
+        return safe_path
+    return f"{frontend_base_url}{safe_path}"
+
+
+def get_github_callback_url(request: Request) -> str:
+    configured_callback_url = (settings.auth.github_callback_url or "").strip()
+    if configured_callback_url:
+        return configured_callback_url
+    return str(request.url_for("github_callback"))
+
+
+def github_oauth_is_configured() -> bool:
+    return bool(settings.auth.github_client_id and settings.auth.github_client_secret)
+
+
+def set_github_oauth_cookie(response: Response, key: str, value: str) -> None:
+    response.set_cookie(
+        key=key,
+        value=value,
+        max_age=GITHUB_OAUTH_COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=settings.auth.cookie_secure,
+        samesite=settings.auth.cookie_samesite,
+        path="/auth/github",
+    )
+
+
+def clear_github_oauth_cookies(response: Response) -> None:
+    for key in (GITHUB_OAUTH_STATE_COOKIE, GITHUB_OAUTH_NEXT_COOKIE):
+        response.delete_cookie(
+            key=key,
+            path="/auth/github",
+            samesite=settings.auth.cookie_samesite,
+            secure=settings.auth.cookie_secure,
+            httponly=True,
+        )
+
+
+def redirect_to_auth_error(error_code: str) -> RedirectResponse:
+    response = RedirectResponse(
+        build_frontend_redirect("/login", {"oauth_error": error_code}),
+        status_code=302,
+    )
+    clear_github_oauth_cookies(response)
+    return response
+
+
 def assert_chat_owner(session_id: str, user_id: str) -> dict | None:
     session_row = get_chat_session(session_id)
     if session_row and session_row.get("account_user_id") != user_id:
@@ -757,34 +798,75 @@ def assert_chat_owner(session_id: str, user_id: str) -> dict | None:
 
 
 @app.post("/auth/register")
-async def register(req: RegisterRequest, request: Request, response: Response):
-    if not settings.auth.public_registration_enabled:
-        raise HTTPException(status_code=403, detail="当前不开放注册")
-    normalized = validate_email_and_password(req.email, req.password)
-    invitation_code = normalize_invitation_code(req.invitation_code)
-    if not invitation_code:
-        raise HTTPException(status_code=400, detail="请填写邀请码")
+async def register():
+    raise HTTPException(status_code=410, detail="当前仅支持使用 GitHub 注册")
+
+
+@app.get("/auth/github/start")
+async def github_start(request: Request, next: str = "/"):
+    if not github_oauth_is_configured():
+        return redirect_to_auth_error("github_not_configured")
+
+    state = secrets.token_urlsafe(32)
+    redirect_uri = get_github_callback_url(request)
+    params = {
+        "client_id": settings.auth.github_client_id,
+        "redirect_uri": redirect_uri,
+        "scope": "read:user user:email",
+        "state": state,
+        "allow_signup": "true",
+    }
+    response = RedirectResponse(f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}", status_code=302)
+    set_github_oauth_cookie(response, GITHUB_OAUTH_STATE_COOKIE, state)
+    set_github_oauth_cookie(response, GITHUB_OAUTH_NEXT_COOKIE, sanitize_frontend_path(next))
+    return response
+
+
+@app.get("/auth/github/callback")
+async def github_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    next_path = sanitize_frontend_path(request.cookies.get(GITHUB_OAUTH_NEXT_COOKIE))
+    expected_state = request.cookies.get(GITHUB_OAUTH_STATE_COOKIE)
+    if error:
+        return redirect_to_auth_error("github_cancelled")
+    if not code or not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        return redirect_to_auth_error("github_state_invalid")
+    if not github_oauth_is_configured():
+        return redirect_to_auth_error("github_not_configured")
+
+    redirect_response = RedirectResponse(build_frontend_redirect(next_path), status_code=302)
+    clear_github_oauth_cookies(redirect_response)
     try:
-        user, error = create_user_with_invitation(
-            req.email.strip(),
-            normalized,
-            hash_password(req.password),
-            hash_session_token(invitation_code),
-            role="user",
-            email_verified=not settings.auth.require_email_verification,
+        access_token = await asyncio.to_thread(
+            exchange_github_code,
+            settings.auth.github_client_id,
+            settings.auth.github_client_secret,
+            code,
+            get_github_callback_url(request),
         )
-        if error == "email_exists":
-            raise HTTPException(status_code=409, detail="该邮箱已注册")
-        if error == "invalid_invitation_code":
-            raise HTTPException(status_code=400, detail="邀请码无效")
-        if error == "invitation_code_exhausted":
-            raise HTTPException(status_code=400, detail="邀请码使用次数已用完")
+        github_user = await asyncio.to_thread(fetch_github_oauth_user, access_token)
+        user, link_error = await asyncio.to_thread(
+            create_or_link_github_user,
+            github_user.email.strip(),
+            normalize_email(github_user.email),
+            github_user.provider_user_id,
+            github_user.login,
+            github_user.name,
+            github_user.avatar_url,
+        )
+        if link_error == "email_linked_to_different_github":
+            return redirect_to_auth_error("github_email_conflict")
         if not user:
-            raise HTTPException(status_code=400, detail="注册失败")
-        create_login_session(user, request, response)
-        return {"user": public_user(user)}
+            return redirect_to_auth_error("github_login_failed")
+        if not user["is_active"]:
+            return redirect_to_auth_error("github_user_disabled")
+        create_login_session(user, request, redirect_response)
+        return redirect_response
+    except GithubOAuthError as exc:
+        logger.warning("GitHub OAuth failed: %s", exc)
+        return redirect_to_auth_error("github_login_failed")
     except DatabaseError as exc:
-        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+        logger.warning("GitHub OAuth database failure: %s", exc)
+        return redirect_to_auth_error("github_database_unavailable")
 
 
 @app.post("/auth/login")
@@ -792,11 +874,12 @@ async def login(req: AuthRequest, request: Request, response: Response):
     normalized = validate_email_and_password(req.email, req.password)
     try:
         user = get_user_by_email(normalized)
-        if not user or not verify_password(user["password_hash"], req.password):
+        password_hash = user.get("password_hash") if user else None
+        if not user or not password_hash or not verify_password(password_hash, req.password):
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
         if not user["is_active"]:
             raise HTTPException(status_code=403, detail="账号已被停用")
-        if password_needs_rehash(user["password_hash"]):
+        if password_needs_rehash(password_hash):
             update_user_password(user["id"], hash_password(req.password))
             user = get_user_by_id(user["id"]) or user
         create_login_session(user, request, response)
@@ -829,7 +912,10 @@ async def change_password(
     user: dict = Depends(require_current_user),
 ):
     validate_email_and_password(user["email"], req.new_password)
-    if not verify_password(user["password_hash"], req.current_password):
+    password_hash = user.get("password_hash")
+    if not password_hash:
+        raise HTTPException(status_code=400, detail="当前账号未设置密码，请使用 GitHub 登录")
+    if not verify_password(password_hash, req.current_password):
         raise HTTPException(status_code=400, detail="当前密码错误")
     token = current_session_token(request)
     token_hash = hash_session_token(token) if token else None
@@ -1180,67 +1266,6 @@ async def admin_list_users(
             "page": safe_page,
             "pages": math.ceil(total / safe_limit) if total > 0 else 1,
         }
-    except DatabaseError as exc:
-        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
-
-
-@app.get("/admin/invitation-codes")
-async def admin_list_invitation_codes(admin: dict = Depends(require_admin_user)):
-    try:
-        return {"codes": list_invitation_codes()}
-    except DatabaseError as exc:
-        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
-
-
-@app.post("/admin/invitation-codes")
-async def admin_create_invitation_code(
-    req: InvitationCodeCreateRequest,
-    admin: dict = Depends(require_admin_user),
-):
-    if req.max_uses < 1 or req.max_uses > 10000:
-        raise HTTPException(status_code=400, detail="可使用次数必须在 1 到 10000 之间")
-    code = generate_invitation_code()
-    try:
-        invitation = create_invitation_code(
-            hash_session_token(normalize_invitation_code(code)),
-            code,
-            code[:7],
-            req.max_uses,
-            admin["id"],
-        )
-        return {"code": code, "invitation": invitation}
-    except DatabaseError as exc:
-        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
-
-
-@app.patch("/admin/invitation-codes/{code_id}")
-async def admin_update_invitation_code(
-    code_id: str,
-    req: InvitationCodeUpdateRequest,
-    admin: dict = Depends(require_admin_user),
-):
-    if req.max_uses < 1 or req.max_uses > 10000:
-        raise HTTPException(status_code=400, detail="可使用次数必须在 1 到 10000 之间")
-    try:
-        invitation, error = update_invitation_code_max_uses(code_id, req.max_uses)
-        if error == "not_found":
-            raise HTTPException(status_code=404, detail="邀请码不存在")
-        if error == "below_used_count":
-            raise HTTPException(status_code=400, detail="可使用次数不能小于已使用次数")
-        return invitation
-    except DatabaseError as exc:
-        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
-
-
-@app.delete("/admin/invitation-codes/{code_id}")
-async def admin_delete_invitation_code(
-    code_id: str,
-    admin: dict = Depends(require_admin_user),
-):
-    try:
-        if not delete_invitation_code(code_id):
-            raise HTTPException(status_code=404, detail="邀请码不存在")
-        return {"ok": True}
     except DatabaseError as exc:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
 

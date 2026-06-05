@@ -157,28 +157,6 @@ export interface AdminUserListResponse {
   pages: number;
 }
 
-export interface AdminInvitationCode {
-  id: string;
-  code_text?: string | null;
-  code_prefix: string;
-  max_uses: number;
-  used_count: number;
-  is_active: boolean;
-  created_by?: string | null;
-  created_by_email?: string | null;
-  created_at: string;
-  last_used_at?: string | null;
-}
-
-export interface AdminInvitationCodeListResponse {
-  codes: AdminInvitationCode[];
-}
-
-export interface AdminInvitationCodeCreateResponse {
-  code: string;
-  invitation: AdminInvitationCode;
-}
-
 export interface OnlineTrendPoint {
   bucket_at: string;
   count: number;

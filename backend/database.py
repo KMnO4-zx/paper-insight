@@ -44,16 +44,6 @@ def _normalize_session_row(row: dict | None) -> dict | None:
     return normalized
 
 
-def _normalize_invitation_code_row(row: dict | None) -> dict | None:
-    if not row:
-        return None
-    normalized = dict(row)
-    normalized["id"] = str(normalized["id"])
-    if normalized.get("created_by") is not None:
-        normalized["created_by"] = str(normalized["created_by"])
-    return normalized
-
-
 def _normalize_feishu_settings_row(row: dict | None) -> dict | None:
     if not row:
         return None
@@ -409,7 +399,7 @@ def update_llm_response(paper_id: str, response: str):
 def create_user(
     email: str,
     email_normalized: str,
-    password_hash: str,
+    password_hash: str | None,
     role: str = "user",
     email_verified: bool = False,
 ) -> dict:
@@ -431,61 +421,120 @@ def create_user(
     return _run_with_retry(operation, f"create_user:{email_normalized}")
 
 
-def create_user_with_invitation(
+def create_or_link_github_user(
     email: str,
     email_normalized: str,
-    password_hash: str,
-    invitation_code_hash: str,
-    role: str = "user",
-    email_verified: bool = True,
+    provider_user_id: str,
+    provider_username: str,
+    display_name: str | None = None,
+    avatar_url: str | None = None,
 ) -> tuple[dict | None, str | None]:
     def operation() -> tuple[dict | None, str | None]:
         with _get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id FROM users WHERE email_normalized = %s",
-                    (email_normalized,),
+                    """
+                    SELECT users.*
+                    FROM auth_identities
+                    JOIN users ON users.id = auth_identities.user_id
+                    WHERE auth_identities.provider = 'github'
+                      AND auth_identities.provider_user_id = %s
+                    """,
+                    (provider_user_id,),
                 )
-                if cur.fetchone():
-                    return None, "email_exists"
+                existing_identity_user = cur.fetchone()
+                if existing_identity_user:
+                    cur.execute(
+                        """
+                        UPDATE auth_identities
+                        SET provider_username = %s,
+                            provider_email = %s,
+                            display_name = %s,
+                            avatar_url = %s,
+                            updated_at = NOW(),
+                            last_login_at = NOW()
+                        WHERE provider = 'github'
+                          AND provider_user_id = %s
+                        """,
+                        (provider_username, email, display_name, avatar_url, provider_user_id),
+                    )
+                    conn.commit()
+                    return _normalize_user_row(existing_identity_user), None
 
                 cur.execute(
                     """
-                    SELECT id, max_uses, used_count, is_active
-                    FROM invitation_codes
-                    WHERE code_hash = %s
+                    SELECT *
+                    FROM users
+                    WHERE email_normalized = %s
                     FOR UPDATE
                     """,
-                    (invitation_code_hash,),
+                    (email_normalized,),
                 )
-                invitation = cur.fetchone()
-                if not invitation or not invitation["is_active"]:
-                    return None, "invalid_invitation_code"
-                if invitation["used_count"] >= invitation["max_uses"]:
-                    return None, "invitation_code_exhausted"
+                user = cur.fetchone()
+                if user:
+                    cur.execute(
+                        """
+                        SELECT provider_user_id
+                        FROM auth_identities
+                        WHERE provider = 'github'
+                          AND user_id = %s
+                        FOR UPDATE
+                        """,
+                        (user["id"],),
+                    )
+                    linked_identity = cur.fetchone()
+                    if linked_identity and linked_identity["provider_user_id"] != provider_user_id:
+                        return None, "email_linked_to_different_github"
+
+                    cur.execute(
+                        """
+                        UPDATE users
+                        SET email_verified = TRUE,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (user["id"],),
+                    )
+                    user = cur.fetchone()
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO users (email, email_normalized, password_hash, role, email_verified)
+                        VALUES (%s, %s, NULL, 'user', TRUE)
+                        RETURNING *
+                        """,
+                        (email, email_normalized),
+                    )
+                    user = cur.fetchone()
 
                 cur.execute(
                     """
-                    INSERT INTO users (email, email_normalized, password_hash, role, email_verified)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING *
+                    INSERT INTO auth_identities (
+                      user_id,
+                      provider,
+                      provider_user_id,
+                      provider_username,
+                      provider_email,
+                      display_name,
+                      avatar_url,
+                      last_login_at
+                    )
+                    VALUES (%s, 'github', %s, %s, %s, %s, %s, NOW())
                     """,
-                    (email, email_normalized, password_hash, role, email_verified),
-                )
-                user = cur.fetchone()
-                cur.execute(
-                    """
-                    UPDATE invitation_codes
-                    SET used_count = used_count + 1,
-                        last_used_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (invitation["id"],),
+                    (
+                        user["id"],
+                        provider_user_id,
+                        provider_username,
+                        email,
+                        display_name,
+                        avatar_url,
+                    ),
                 )
             conn.commit()
         return _normalize_user_row(user), None
 
-    return _run_with_retry(operation, f"create_user_with_invitation:{email_normalized}")
+    return _run_with_retry(operation, f"create_or_link_github_user:{provider_user_id}")
 
 
 def get_user_by_email(email_normalized: str) -> dict | None:
@@ -770,112 +819,6 @@ def delete_user(user_id: str) -> bool:
         return deleted
 
     return _run_with_retry(operation, f"delete_user:{user_id}")
-
-
-def create_invitation_code(
-    code_hash: str,
-    code_text: str,
-    code_prefix: str,
-    max_uses: int,
-    created_by: str,
-) -> dict:
-    def operation() -> dict:
-        with _get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO invitation_codes (code_hash, code_text, code_prefix, max_uses, created_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING id, code_text, code_prefix, max_uses, used_count, is_active,
-                              created_by, created_at, last_used_at
-                    """,
-                    (code_hash, code_text, code_prefix, max_uses, created_by),
-                )
-                invitation = cur.fetchone()
-            conn.commit()
-        return _normalize_invitation_code_row(invitation)
-
-    return _run_with_retry(operation, "create_invitation_code")
-
-
-def list_invitation_codes(limit: int = 50) -> list[dict]:
-    def operation() -> list[dict]:
-        with _get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT invitation_codes.id,
-                           invitation_codes.code_text,
-                           invitation_codes.code_prefix,
-                           invitation_codes.max_uses,
-                           invitation_codes.used_count,
-                           invitation_codes.is_active,
-                           invitation_codes.created_by,
-                           invitation_codes.created_at,
-                           invitation_codes.last_used_at,
-                           users.email AS created_by_email
-                    FROM invitation_codes
-                    LEFT JOIN users ON users.id = invitation_codes.created_by
-                    ORDER BY invitation_codes.created_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
-                rows = cur.fetchall()
-        return [_normalize_invitation_code_row(row) for row in rows]
-
-    return _run_with_retry(operation, "list_invitation_codes")
-
-
-def delete_invitation_code(code_id: str) -> bool:
-    def operation() -> bool:
-        with _get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM invitation_codes WHERE id = %s RETURNING id",
-                    (code_id,),
-                )
-                deleted = cur.fetchone() is not None
-            conn.commit()
-        return deleted
-
-    return _run_with_retry(operation, f"delete_invitation_code:{code_id}")
-
-
-def update_invitation_code_max_uses(code_id: str, max_uses: int) -> tuple[dict | None, str | None]:
-    def operation() -> tuple[dict | None, str | None]:
-        with _get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, used_count
-                    FROM invitation_codes
-                    WHERE id = %s
-                    FOR UPDATE
-                    """,
-                    (code_id,),
-                )
-                existing = cur.fetchone()
-                if not existing:
-                    return None, "not_found"
-                if max_uses < existing["used_count"]:
-                    return None, "below_used_count"
-
-                cur.execute(
-                    """
-                    UPDATE invitation_codes
-                    SET max_uses = %s
-                    WHERE id = %s
-                    RETURNING id, code_text, code_prefix, max_uses, used_count, is_active,
-                              created_by, created_at, last_used_at
-                    """,
-                    (max_uses, code_id),
-                )
-                invitation = cur.fetchone()
-            conn.commit()
-        return _normalize_invitation_code_row(invitation), None
-
-    return _run_with_retry(operation, f"update_invitation_code_max_uses:{code_id}")
 
 
 def _normalize_model_names(model_names: list[str] | None) -> list[str]:
