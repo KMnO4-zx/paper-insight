@@ -80,6 +80,13 @@ export interface OnlineCount {
   guest_count?: number;
 }
 
+export interface ActiveLlmModel {
+  configured: boolean;
+  provider_key?: string | null;
+  provider_name?: string | null;
+  model_name?: string | null;
+}
+
 export interface PaperMark {
   viewed: boolean;
   liked: boolean;

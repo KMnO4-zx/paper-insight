@@ -1,11 +1,57 @@
 from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 import asyncio
 import logging
+from dataclasses import dataclass
 from config import settings
 from prompt import PAPER_ANALYSIS_PROMPT
 
 MISSING_API_KEY_PLACEHOLDER = "missing-api-key"
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LLMStreamChunk:
+    kind: str
+    content: str
+
+
+def _delta_to_dict(delta) -> dict:
+    if delta is None:
+        return {}
+    if isinstance(delta, dict):
+        return delta
+    if hasattr(delta, "model_dump"):
+        return delta.model_dump(exclude_none=True)
+    return {}
+
+
+def _extract_delta_text(delta, *field_names: str) -> str | None:
+    delta_dict = _delta_to_dict(delta)
+    model_extra = getattr(delta, "model_extra", None)
+
+    for field_name in field_names:
+        value = getattr(delta, field_name, None)
+        if not value:
+            value = delta_dict.get(field_name)
+        if not value and isinstance(model_extra, dict):
+            value = model_extra.get(field_name)
+        if value:
+            return str(value)
+    return None
+
+
+def iter_llm_stream_chunks(chunk):
+    if not getattr(chunk, "choices", None):
+        return
+
+    delta = chunk.choices[0].delta
+    reasoning = _extract_delta_text(delta, "reasoning", "reasoning_content")
+    if reasoning:
+        yield LLMStreamChunk(kind="reasoning", content=reasoning)
+
+    content = _extract_delta_text(delta, "content")
+    if content:
+        yield LLMStreamChunk(kind="content", content=content)
 
 async def retry_on_error(func, max_retries=3, delay=1.0):
     """Simple retry wrapper for async functions"""
@@ -39,7 +85,7 @@ class BaseLLM:
             return response.choices[0].message.content
         return await retry_on_error(_call)
 
-    async def get_response_stream(self, prompt: str, **kwargs):
+    async def get_response_stream_events(self, prompt: str, **kwargs):
         response = await self.client.chat.completions.create(
             model=self.model,
             temperature=1.0,
@@ -51,8 +97,13 @@ class BaseLLM:
         **kwargs
         )
         async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            for stream_chunk in iter_llm_stream_chunks(chunk):
+                yield stream_chunk
+
+    async def get_response_stream(self, prompt: str, **kwargs):
+        async for stream_chunk in self.get_response_stream_events(prompt, **kwargs):
+            if stream_chunk.kind == "content":
+                yield stream_chunk.content
 
     async def chat(self, messages: list, **kwargs) -> str:
         async def _call():
@@ -65,7 +116,7 @@ class BaseLLM:
             return response.choices[0].message.content
         return await retry_on_error(_call)
 
-    async def chat_stream(self, messages: list, **kwargs):
+    async def chat_stream_events(self, messages: list, **kwargs):
         response = await self.client.chat.completions.create(
             model=self.model,
             temperature=1.0,
@@ -74,8 +125,13 @@ class BaseLLM:
             **kwargs
         )
         async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            for stream_chunk in iter_llm_stream_chunks(chunk):
+                yield stream_chunk
+
+    async def chat_stream(self, messages: list, **kwargs):
+        async for stream_chunk in self.chat_stream_events(messages, **kwargs):
+            if stream_chunk.kind == "content":
+                yield stream_chunk.content
 
 
 class ManagedLLM:
@@ -136,7 +192,7 @@ class ManagedLLM:
 
         return await retry_on_error(_call)
 
-    async def get_response_stream(self, prompt: str, **kwargs):
+    async def get_response_stream_events(self, prompt: str, **kwargs):
         config = self._require_config()
         client = self._client_for_config(config)
         params = self._parameters(config, kwargs)
@@ -151,8 +207,13 @@ class ManagedLLM:
             **params,
         )
         async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            for stream_chunk in iter_llm_stream_chunks(chunk):
+                yield stream_chunk
+
+    async def get_response_stream(self, prompt: str, **kwargs):
+        async for stream_chunk in self.get_response_stream_events(prompt, **kwargs):
+            if stream_chunk.kind == "content":
+                yield stream_chunk.content
 
     async def chat(self, messages: list, **kwargs) -> str:
         config = self._require_config()
@@ -170,7 +231,7 @@ class ManagedLLM:
 
         return await retry_on_error(_call)
 
-    async def chat_stream(self, messages: list, **kwargs):
+    async def chat_stream_events(self, messages: list, **kwargs):
         config = self._require_config()
         client = self._client_for_config(config)
         params = self._parameters(config, kwargs)
@@ -182,8 +243,13 @@ class ManagedLLM:
             **params,
         )
         async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            for stream_chunk in iter_llm_stream_chunks(chunk):
+                yield stream_chunk
+
+    async def chat_stream(self, messages: list, **kwargs):
+        async for stream_chunk in self.chat_stream_events(messages, **kwargs):
+            if stream_chunk.kind == "content":
+                yield stream_chunk.content
 
     async def test_one_token(self) -> dict:
         config = self._require_config()
@@ -256,6 +322,11 @@ class OpenRouterLLM(BaseLLM):
         async for chunk in super().get_response_stream(prompt, **kwargs):
             yield chunk
 
+    async def get_response_stream_events(self, prompt: str, **kwargs):
+        kwargs.setdefault('max_completion_tokens', self.max_completion_tokens)
+        async for chunk in super().get_response_stream_events(prompt, **kwargs):
+            yield chunk
+
     async def chat(self, messages: list, **kwargs) -> str:
         kwargs.setdefault('max_completion_tokens', self.max_completion_tokens)
         return await super().chat(messages, **kwargs)
@@ -263,6 +334,11 @@ class OpenRouterLLM(BaseLLM):
     async def chat_stream(self, messages: list, **kwargs):
         kwargs.setdefault('max_completion_tokens', self.max_completion_tokens)
         async for chunk in super().chat_stream(messages, **kwargs):
+            yield chunk
+
+    async def chat_stream_events(self, messages: list, **kwargs):
+        kwargs.setdefault('max_completion_tokens', self.max_completion_tokens)
+        async for chunk in super().chat_stream_events(messages, **kwargs):
             yield chunk
 
 class StepLLM(BaseLLM):

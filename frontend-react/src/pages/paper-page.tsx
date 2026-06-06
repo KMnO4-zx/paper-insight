@@ -3,6 +3,7 @@ import { Bookmark, ChevronDown, ChevronLeft, ExternalLink, Eye, FileText, Heart,
 
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { ActiveModelBadge } from '@/components/active-model-badge';
 import { ChatPanel } from '@/components/chat-panel';
 import {
   DropdownMenu,
@@ -10,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ReasoningStreamPanel } from '@/components/reasoning-stream-panel';
 import { RichContent } from '@/components/rich-content';
 import { fetchPaperInfo, fetchPaperMarks, streamSse, updatePaperMark } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -53,6 +55,7 @@ export function PaperPage({ paperId }: PaperPageProps) {
   const [paperError, setPaperError] = useState<string | null>(null);
   const [paperLoading, setPaperLoading] = useState(true);
   const [analysisText, setAnalysisText] = useState('');
+  const [analysisReasoning, setAnalysisReasoning] = useState('');
   const [analysisStatus, setAnalysisStatus] = useState('正在获取论文信息...');
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisStreaming, setAnalysisStreaming] = useState(false);
@@ -134,6 +137,7 @@ export function PaperPage({ paperId }: PaperPageProps) {
     analysisRequestIdRef.current = requestId;
 
     setAnalysisText('');
+    setAnalysisReasoning('');
     setAnalysisError(null);
     setAnalysisLoading(true);
     setAnalysisStreaming(true);
@@ -158,14 +162,20 @@ export function PaperPage({ paperId }: PaperPageProps) {
             if (event === 'status') {
               setAnalysisStatus(data);
             }
+            if (event === 'reasoning') {
+              setAnalysisLoading(false);
+              setAnalysisReasoning((current) => current + data);
+            }
             if (event === 'error') {
               setAnalysisLoading(false);
               setAnalysisStreaming(false);
+              setAnalysisReasoning('');
               setAnalysisError(data || '分析失败');
             }
             if (event === 'done') {
               setAnalysisLoading(false);
               setAnalysisStreaming(false);
+              setAnalysisReasoning('');
               setAnalysisStatus('');
             }
           },
@@ -177,6 +187,7 @@ export function PaperPage({ paperId }: PaperPageProps) {
       }
       setAnalysisLoading(false);
       setAnalysisStreaming(false);
+      setAnalysisReasoning('');
       setAnalysisError(error instanceof Error ? error.message : '分析失败');
     } finally {
       if (analysisAbortRef.current === controller) {
@@ -389,20 +400,23 @@ export function PaperPage({ paperId }: PaperPageProps) {
 
           <section className="rounded-[32px] bg-white p-6 shadow-sm ring-1 ring-black/5">
             <div className="flex flex-col gap-3 border-b border-[#eef2f7] pb-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 <Sparkles className="h-5 w-5 text-[#ff9900]" />
                 <div>
-                  <h2 className="text-xl font-semibold text-[#172033]">AI 分析</h2>
+                  <h2 className="whitespace-nowrap text-xl font-semibold text-[#172033]">AI 分析</h2>
                   {analysisStatus ? <p className="text-sm text-[#728095]">{analysisStatus}</p> : null}
                 </div>
               </div>
-              <Button
-                variant="outline"
-                className="rounded-full"
-                onClick={() => void loadAnalysis(true)}
-              >
-                重新分析
-              </Button>
+              <div className="flex max-w-full flex-wrap items-center gap-2">
+                <ActiveModelBadge className="max-w-[18rem]" />
+                <Button
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => void loadAnalysis(true)}
+                >
+                  重新分析
+                </Button>
+              </div>
             </div>
 
             {analysisLoading ? (
@@ -413,12 +427,17 @@ export function PaperPage({ paperId }: PaperPageProps) {
             ) : analysisError ? (
               <div className="mt-6 rounded-2xl bg-[#fff1f2] p-4 text-[#b91c1c]">{analysisError}</div>
             ) : (
-              <RichContent
-                content={analysisText}
-                analysisMode
-                isStreaming={analysisStreaming}
-                className="markdown-body analysis-markdown mt-6 text-base leading-7 text-[#334155]"
-              />
+              <div className="mt-6 space-y-4">
+                <ReasoningStreamPanel reasoning={analysisStreaming ? analysisReasoning : ''} />
+                {analysisText ? (
+                  <RichContent
+                    content={analysisText}
+                    analysisMode
+                    isStreaming={analysisStreaming}
+                    className="markdown-body analysis-markdown text-base leading-7 text-[#334155]"
+                  />
+                ) : null}
+              </div>
             )}
           </section>
         </div>

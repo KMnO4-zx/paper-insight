@@ -61,6 +61,7 @@ from database import (
     get_conference_papers,
     get_hf_daily_papers,
     get_feishu_settings,
+    get_active_llm_config,
     get_paper,
     get_llm_provider,
     get_paper_marks,
@@ -647,6 +648,24 @@ def public_llm_provider(provider: dict) -> dict:
     }
 
 
+def public_active_llm_config(config: dict | None) -> dict:
+    if not config:
+        return {
+            "configured": False,
+            "provider_key": None,
+            "provider_name": None,
+            "model_name": None,
+        }
+
+    model_name = config.get("model_name") or config.get("active_model")
+    return {
+        "configured": bool(config.get("api_key") and config.get("base_url") and model_name),
+        "provider_key": config.get("provider_key"),
+        "provider_name": config.get("name"),
+        "model_name": model_name,
+    }
+
+
 def validate_email_and_password(email: str, password: str) -> str:
     normalized = normalize_email(email)
     if "@" not in normalized or "." not in normalized.split("@")[-1]:
@@ -964,6 +983,14 @@ async def heartbeat(req: PresenceRequest, request: Request):
 async def get_online_count():
     try:
         return get_presence_counts(settings.presence.online_timeout_seconds)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.get("/llm/active")
+async def get_active_llm():
+    try:
+        return public_active_llm_config(get_active_llm_config())
     except DatabaseError as exc:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
 
@@ -1410,9 +1437,12 @@ async def get_paper_analysis(paper_id: str, reanalyze: bool = False):
         user_prompt = f"以下是论文内容：\n{paper_content}"
 
         full_response = []
-        async for chunk in llm.get_response_stream(user_prompt):
-            full_response.append(chunk)
-            yield {"data": chunk}
+        async for stream_chunk in llm.get_response_stream_events(user_prompt):
+            if stream_chunk.kind == "reasoning":
+                yield {"event": "reasoning", "data": stream_chunk.content}
+                continue
+            full_response.append(stream_chunk.content)
+            yield {"data": stream_chunk.content}
 
         normalized_response = normalize_llm_markdown("".join(full_response), analysis_mode=True)
         await asyncio.to_thread(update_llm_response, paper_id, normalized_response)
@@ -1473,9 +1503,12 @@ async def chat_with_paper(
                 )
 
             chunks = []
-            async for chunk in session.send_stream(req.message):
-                chunks.append(chunk)
-                yield {"data": chunk}
+            async for stream_chunk in session.send_stream_events(req.message):
+                if stream_chunk.kind == "reasoning":
+                    yield {"event": "reasoning", "data": stream_chunk.content}
+                    continue
+                chunks.append(stream_chunk.content)
+                yield {"data": stream_chunk.content}
 
             # Persist messages
             save_chat_message(req.session_id, "user", req.message)
@@ -1570,9 +1603,12 @@ async def regenerate_chat(
     async def generate():
         try:
             chunks = []
-            async for chunk in session.send_stream(req.message):
-                chunks.append(chunk)
-                yield {"data": chunk}
+            async for stream_chunk in session.send_stream_events(req.message):
+                if stream_chunk.kind == "reasoning":
+                    yield {"event": "reasoning", "data": stream_chunk.content}
+                    continue
+                chunks.append(stream_chunk.content)
+                yield {"data": stream_chunk.content}
 
             save_chat_message(req.session_id, "user", req.message)
             save_chat_message(req.session_id, "assistant", "".join(chunks))

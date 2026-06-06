@@ -23,11 +23,17 @@ class ChatSession:
         return normalized_reply
 
     async def send_stream(self, user_message: str, **kwargs):
+        async for stream_chunk in self.send_stream_events(user_message, **kwargs):
+            if stream_chunk.kind == "content":
+                yield stream_chunk.content
+
+    async def send_stream_events(self, user_message: str, **kwargs):
         self.history.append({"role": "user", "content": user_message})
         chunks = []
-        async for chunk in self.llm.chat_stream(self._build_messages(), **kwargs):
-            chunks.append(chunk)
-            yield chunk
+        async for stream_chunk in self.llm.chat_stream_events(self._build_messages(), **kwargs):
+            if stream_chunk.kind == "content":
+                chunks.append(stream_chunk.content)
+            yield stream_chunk
         self.history.append({"role": "assistant", "content": normalize_llm_markdown("".join(chunks))})
 
     def clear(self):

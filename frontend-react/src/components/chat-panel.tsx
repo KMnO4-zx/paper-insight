@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   History,
+  Keyboard,
   Loader2,
   MessageSquare,
   PanelRightClose,
@@ -15,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { deleteChatSession, fetchChatMessages, fetchChatSessions, streamSse } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { navigate } from '@/lib/router';
+import { ReasoningStreamPanel } from '@/components/reasoning-stream-panel';
 import { RichContent } from '@/components/rich-content';
 import type { ChatMessage, ChatSessionSummary } from '@/types';
 
@@ -26,6 +28,7 @@ interface LocalChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string;
 }
 
 function toLocalMessages(messages: ChatMessage[]): LocalChatMessage[] {
@@ -170,11 +173,25 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
           );
         },
         onEvent: (event, data) => {
+          if (event === 'reasoning') {
+            setMessages((currentMessages) =>
+              currentMessages.map((message) =>
+                message.id === assistantId
+                  ? { ...message, reasoning: `${message.reasoning ?? ''}${data}` }
+                  : message,
+              ),
+            );
+          }
           if (event === 'error') {
             throw new Error(data || '对话流中断');
           }
           if (event === 'done') {
             didReceiveDone = true;
+            setMessages((currentMessages) =>
+              currentMessages.map((message) =>
+                message.id === assistantId ? { ...message, reasoning: '' } : message,
+              ),
+            );
           }
         },
       },
@@ -209,7 +226,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
     setMessages((currentMessages) => [
       ...currentMessages,
       userMessage,
-      { id: assistantId, role: 'assistant', content: '' },
+      { id: assistantId, role: 'assistant', content: '', reasoning: '' },
     ]);
     setInput('');
     setIsSending(true);
@@ -227,7 +244,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
       setMessages((currentMessages) =>
         currentMessages.map((currentMessage) =>
           currentMessage.id === assistantId
-            ? { ...currentMessage, content: `发送失败: ${message}` }
+            ? { ...currentMessage, content: `发送失败: ${message}`, reasoning: '' }
             : currentMessage,
         ),
       );
@@ -258,7 +275,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
           ? currentMessages
           : currentMessages.filter((_, index) => index !== lastAssistantIndex);
 
-      return [...pruned, { id: assistantId, role: 'assistant', content: '' }];
+      return [...pruned, { id: assistantId, role: 'assistant', content: '', reasoning: '' }];
     });
     setIsSending(true);
     setStreamingAssistantId(assistantId);
@@ -274,7 +291,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
       setMessages((currentMessages) =>
         currentMessages.map((currentMessage) =>
           currentMessage.id === assistantId
-            ? { ...currentMessage, content: `重新生成失败: ${message}` }
+            ? { ...currentMessage, content: `重新生成失败: ${message}`, reasoning: '' }
             : currentMessage,
         ),
       );
@@ -317,39 +334,60 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
 
   return (
     <section className="flex h-full min-h-[32rem] max-h-[calc(100vh-10rem)] flex-col overflow-hidden rounded-[28px] bg-white shadow-sm ring-1 ring-black/5 lg:min-h-[36rem] xl:max-h-none">
-      <div className="flex items-center justify-between border-b border-[#eef2f7] px-4 py-4">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-[#ff9900]" />
-          <div>
-            <div className="text-sm font-semibold text-[#1e293b]">论文对话</div>
-            <div className="text-xs text-[#728095]">Shift + Enter 发送</div>
+      <div className="border-b border-[#eef2f7] px-4 py-4">
+        <div className="flex min-h-12 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-[#fff7ed] text-[#ff9900] ring-1 ring-[#fed7aa]">
+              <MessageSquare className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold text-[#1e293b]">论文对话</div>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="rounded-full" onClick={newChatSession}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            新对话
-          </Button>
-          <Button variant="ghost" size="sm" className="rounded-full lg:hidden" onClick={() => setShowHistory((visible) => !visible)}>
-            <History className="mr-1.5 h-4 w-4" />
-            历史
-          </Button>
-          <div className="hidden items-center gap-1 lg:flex">
+          <div className="flex shrink-0 items-center gap-1.5">
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9 rounded-full"
-              onClick={() =>
-                setDesktopHistoryMode((mode) => (mode === 'hidden' ? 'compact' : 'hidden'))
-              }
-              title={desktopHistoryMode === 'hidden' ? '显示历史对话' : '隐藏历史对话'}
+              className="h-9 w-9 rounded-full text-[#1f2a3a] hover:bg-[#fff7ed] hover:text-[#c2410c]"
+              onClick={newChatSession}
+              title="新对话"
+              aria-label="新对话"
             >
-              {desktopHistoryMode === 'hidden' ? (
-                <PanelRightOpen className="h-4 w-4" />
-              ) : (
-                <PanelRightClose className="h-4 w-4" />
-              )}
+              <Plus className="h-4 w-4" />
             </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 rounded-full text-[#1f2a3a] hover:bg-[#f8fafc] lg:hidden"
+              onClick={() => setShowHistory((visible) => !visible)}
+              title="历史对话"
+              aria-label="历史对话"
+            >
+              <History className="h-4 w-4" />
+            </Button>
+            <div className="hidden items-center gap-1 lg:flex">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-full text-[#1f2a3a] hover:bg-[#f8fafc]"
+                onClick={() =>
+                  setDesktopHistoryMode((mode) => (mode === 'hidden' ? 'compact' : 'hidden'))
+                }
+                title={desktopHistoryMode === 'hidden' ? '显示历史对话' : '隐藏历史对话'}
+              >
+                {desktopHistoryMode === 'hidden' ? (
+                  <PanelRightOpen className="h-4 w-4" />
+                ) : (
+                  <PanelRightClose className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-1 flex justify-end">
+          <div className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-[#8a98ac]">
+            <Keyboard className="h-3.5 w-3.5" />
+            <span>Shift + Enter 发送消息</span>
           </div>
         </div>
       </div>
@@ -374,30 +412,43 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
               </div>
             ) : (
               <div className="space-y-4">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
+                {messages.map((message) => {
+                  const isStreamingAssistant = isSending && message.id === streamingAssistantId;
+                  const showReasoning = message.role === 'assistant' && isStreamingAssistant && message.reasoning;
+                  const showAssistantContent = message.content || !showReasoning;
+
+                  return (
                     <div
-                      className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 ${
-                        message.role === 'user'
-                          ? 'bg-gradient-to-r from-[#ff9900] to-[#ff7a00] text-white'
-                          : 'border border-[#edf2f7] bg-[#fbfcfe] text-[#223045]'
-                      }`}
+                      key={message.id}
+                      className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      {message.role === 'assistant' ? (
-                        <RichContent
-                          content={message.content || '...'}
-                          isStreaming={isSending && message.id === streamingAssistantId}
-                          className="markdown-body text-sm"
-                        />
-                      ) : (
-                        message.content
-                      )}
+                      <div
+                        className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+                          message.role === 'user'
+                            ? 'bg-gradient-to-r from-[#ff9900] to-[#ff7a00] text-white'
+                            : 'border border-[#edf2f7] bg-[#fbfcfe] text-[#223045]'
+                        }`}
+                      >
+                        {message.role === 'assistant' ? (
+                          <>
+                            {showReasoning ? (
+                              <ReasoningStreamPanel reasoning={message.reasoning ?? ''} className={message.content ? 'mb-3' : ''} />
+                            ) : null}
+                            {showAssistantContent ? (
+                              <RichContent
+                                content={message.content || '...'}
+                                isStreaming={isStreamingAssistant}
+                                className="markdown-body text-sm"
+                              />
+                            ) : null}
+                          </>
+                        ) : (
+                          message.content
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

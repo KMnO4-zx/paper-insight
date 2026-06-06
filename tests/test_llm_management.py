@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from llm import ManagedLLM
+from app import public_active_llm_config
 
 
 class FakeCompletions:
@@ -38,6 +39,27 @@ def managed_llm_with_fake_client(completions: FakeCompletions) -> ManagedLLM:
     }
     llm._client_for_config = lambda config: FakeClient(completions)
     return llm
+
+
+def test_public_active_llm_config_exposes_display_fields_only():
+    payload = public_active_llm_config(
+        {
+            "provider_key": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "secret-key",
+            "model_name": "deepseek-v4-pro",
+        }
+    )
+
+    assert payload == {
+        "configured": True,
+        "provider_key": "deepseek",
+        "provider_name": "DeepSeek",
+        "model_name": "deepseek-v4-pro",
+    }
+    assert "api_key" not in payload
+    assert "base_url" not in payload
 
 
 @pytest.mark.asyncio

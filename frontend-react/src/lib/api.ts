@@ -1,4 +1,5 @@
 import type {
+  ActiveLlmModel,
   AdminLlmFetchModelsResponse,
   AdminLlmProvider,
   AdminLlmProviderListResponse,
@@ -146,6 +147,10 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 export async function fetchOnlineCount(): Promise<number> {
   const payload = await apiFetch<OnlineCount>('/online/count');
   return payload.count;
+}
+
+export async function fetchActiveLlmModel(): Promise<ActiveLlmModel> {
+  return apiFetch<ActiveLlmModel>('/llm/active');
 }
 
 export async function sendHeartbeat(clientId: string): Promise<void> {
