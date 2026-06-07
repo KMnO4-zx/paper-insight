@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Brain,
   KeyRound,
@@ -62,6 +62,16 @@ type LlmProviderDraft = {
   active_model: string;
 };
 
+function formatTrendTick(value: string, range: '24h' | '7d') {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return range === '7d'
+    ? parsed.toLocaleDateString([], { month: 'numeric', day: 'numeric' })
+    : parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 export function AdminPage() {
   const { user, isLoading } = useAuth();
   const [range, setRange] = useState<'24h' | '7d'>('24h');
@@ -95,6 +105,19 @@ export function AdminPage() {
   });
 
   const canAccess = user?.role === 'admin';
+  const displayedUsers = useMemo(() => {
+    return [...(users?.users ?? [])].sort((first, second) => {
+      if (first.is_online !== second.is_online) {
+        return first.is_online ? -1 : 1;
+      }
+      const firstSeenAt = first.online_last_seen_at ? new Date(first.online_last_seen_at).getTime() : 0;
+      const secondSeenAt = second.online_last_seen_at ? new Date(second.online_last_seen_at).getTime() : 0;
+      if (firstSeenAt !== secondSeenAt) {
+        return secondSeenAt - firstSeenAt;
+      }
+      return new Date(second.created_at).getTime() - new Date(first.created_at).getTime();
+    });
+  }, [users?.users]);
 
   const load = useCallback(async () => {
     if (!canAccess) {
@@ -662,14 +685,64 @@ export function AdminPage() {
         </div>
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={metrics?.trend ?? []}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="bucket_at" tickFormatter={(value) => new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} />
-              <YAxis allowDecimals={false} />
-              <Tooltip labelFormatter={(value) => new Date(String(value)).toLocaleString()} />
-              <Line type="monotone" dataKey="count" stroke="#ff7a00" strokeWidth={2} dot={false} name="总在线" />
-              <Line type="monotone" dataKey="authenticated_count" stroke="#2563eb" strokeWidth={2} dot={false} name="登录用户" />
-              <Line type="monotone" dataKey="guest_count" stroke="#16a34a" strokeWidth={2} dot={false} name="游客" />
+            <LineChart data={metrics?.trend ?? []} margin={{ top: 10, right: 18, left: -12, bottom: 0 }}>
+              <CartesianGrid vertical={false} strokeDasharray="4 8" stroke="#e7edf5" />
+              <XAxis
+                dataKey="bucket_at"
+                tickFormatter={(value) => formatTrendTick(String(value), range)}
+                axisLine={false}
+                tickLine={false}
+                tickMargin={12}
+                tick={{ fill: '#728095', fontSize: 12 }}
+              />
+              <YAxis
+                allowDecimals={false}
+                axisLine={false}
+                tickLine={false}
+                tickMargin={10}
+                tick={{ fill: '#728095', fontSize: 12 }}
+              />
+              <Tooltip
+                labelFormatter={(value) => new Date(String(value)).toLocaleString()}
+                contentStyle={{
+                  border: '1px solid rgba(226, 232, 240, 0.9)',
+                  borderRadius: 16,
+                  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.12)',
+                }}
+              />
+              <Line
+                type="natural"
+                dataKey="count"
+                stroke="#ff7a00"
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                dot={false}
+                activeDot={{ r: 5, strokeWidth: 2 }}
+                name="总在线"
+              />
+              <Line
+                type="natural"
+                dataKey="authenticated_count"
+                stroke="#2563eb"
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                dot={false}
+                activeDot={{ r: 5, strokeWidth: 2 }}
+                name="登录用户"
+              />
+              <Line
+                type="natural"
+                dataKey="guest_count"
+                stroke="#16a34a"
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                dot={false}
+                activeDot={{ r: 5, strokeWidth: 2 }}
+                name="游客"
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -679,7 +752,7 @@ export function AdminPage() {
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
             <h2 className="text-xl font-semibold text-[#172033]">用户管理</h2>
-            <p className="text-sm text-[#728095]">共 {users?.total ?? 0} 个用户，每页显示 10 个。</p>
+            <p className="text-sm text-[#728095]">共 {users?.total ?? 0} 个用户，在线用户优先显示。</p>
           </div>
           <div className="flex gap-2">
             <Input
@@ -712,14 +785,27 @@ export function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {(users?.users ?? []).length === 0 ? (
+              {displayedUsers.length === 0 ? (
                 <tr>
                   <td className="py-4 text-[#728095]" colSpan={6}>暂无用户</td>
                 </tr>
               ) : (
-                (users?.users ?? []).map((target) => (
+                displayedUsers.map((target) => (
                   <tr key={target.id} className="border-b border-[#f1f5f9]">
-                    <td className="py-3 font-medium text-[#172033]">{target.email}</td>
+                    <td className="py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-[#172033]">{target.email}</span>
+                        {target.is_online ? (
+                          <span
+                            className="inline-flex items-center gap-1.5 rounded-full border border-[#bbf7d0] bg-[#ecfdf5] px-2 py-0.5 text-xs font-medium text-[#047857]"
+                            title={target.online_last_seen_at ? `最近在线：${new Date(target.online_last_seen_at).toLocaleString()}` : '当前在线'}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-[#22c55e] shadow-[0_0_0_3px_rgba(34,197,94,0.16)]" />
+                            在线
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
                     <td>{target.role === 'admin' ? '管理员' : '用户'}</td>
                     <td>{target.is_active ? '启用' : '停用'}</td>
                     <td>{new Date(target.created_at).toLocaleDateString()}</td>

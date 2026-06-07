@@ -743,26 +743,42 @@ def count_active_admins() -> int:
 
 
 def list_users(search: str | None, offset: int, limit: int) -> tuple[list[dict], int]:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.presence.online_timeout_seconds)
+
     def operation() -> tuple[list[dict], int]:
         params: list[object] = []
         where = ""
         if search:
-            where = "WHERE email ILIKE %s"
+            where = "WHERE u.email ILIKE %s"
             params.append(f"%{search}%")
 
         with _get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT COUNT(*) AS total FROM users {where}", params)
+                cur.execute(f"SELECT COUNT(*) AS total FROM users u {where}", params)
                 total = int(cur.fetchone()["total"] or 0)
                 cur.execute(
                     f"""
-                    SELECT id, email, role, is_active, email_verified, created_at, last_login_at
-                    FROM users
+                    WITH active_presence AS (
+                        SELECT user_id, MAX(last_seen_at) AS online_last_seen_at
+                        FROM presence_heartbeats
+                        WHERE user_id IS NOT NULL
+                          AND last_seen_at > %s
+                        GROUP BY user_id
+                    )
+                    SELECT u.id, u.email, u.role, u.is_active, u.email_verified,
+                           u.created_at, u.last_login_at,
+                           (active_presence.user_id IS NOT NULL) AS is_online,
+                           active_presence.online_last_seen_at
+                    FROM users u
+                    LEFT JOIN active_presence ON active_presence.user_id = u.id
                     {where}
-                    ORDER BY created_at DESC
+                    ORDER BY
+                        (active_presence.user_id IS NOT NULL) DESC,
+                        active_presence.online_last_seen_at DESC NULLS LAST,
+                        u.created_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    [*params, limit, offset],
+                    [cutoff, *params, limit, offset],
                 )
                 users = [_normalize_user_row(row) for row in cur.fetchall()]
         return users, total

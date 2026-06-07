@@ -155,6 +155,8 @@ export interface AdminUser {
   email_verified: boolean;
   created_at: string;
   last_login_at?: string | null;
+  is_online: boolean;
+  online_last_seen_at?: string | null;
 }
 
 export interface AdminUserListResponse {
