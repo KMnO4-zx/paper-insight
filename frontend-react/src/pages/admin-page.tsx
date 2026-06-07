@@ -13,9 +13,9 @@ import {
   Users,
 } from 'lucide-react';
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -53,7 +53,7 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { navigate } from '@/lib/router';
-import type { AdminLlmProvider, AdminOnlineMetrics, AdminUser, AdminUserListResponse } from '@/types';
+import type { AdminLlmProvider, AdminOnlineMetrics, AdminUser, AdminUserListResponse, OnlineTrendPoint } from '@/types';
 
 type LlmProviderDraft = {
   name: string;
@@ -70,6 +70,45 @@ function formatTrendTick(value: string, range: '24h' | '7d') {
   return range === '7d'
     ? parsed.toLocaleDateString([], { month: 'numeric', day: 'numeric' })
     : parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+type OnlineTrendTooltipProps = {
+  active?: boolean;
+  label?: string | number;
+  payload?: Array<{
+    payload?: OnlineTrendPoint;
+  }>;
+};
+
+function OnlineTrendTooltip({ active, label, payload }: OnlineTrendTooltipProps) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const point = payload[0]?.payload;
+  if (!point) {
+    return null;
+  }
+
+  return (
+    <div className="min-w-40 rounded-2xl border border-slate-200/90 bg-white/95 p-3 text-sm shadow-[0_18px_40px_rgba(15,23,42,0.12)] backdrop-blur">
+      <div className="font-medium text-[#172033]">{new Date(String(label)).toLocaleString()}</div>
+      <div className="mt-2 space-y-1.5">
+        <div className="flex items-center justify-between gap-5 text-[#ff7a00]">
+          <span>总在线</span>
+          <span className="font-semibold">{point.count}</span>
+        </div>
+        <div className="flex items-center justify-between gap-5 text-[#2563eb]">
+          <span>登录用户</span>
+          <span className="font-semibold">{point.authenticated_count}</span>
+        </div>
+        <div className="flex items-center justify-between gap-5 text-[#16a34a]">
+          <span>游客</span>
+          <span className="font-semibold">{point.guest_count}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function AdminPage() {
@@ -178,6 +217,7 @@ export function AdminPage() {
       active_model: selectedProvider.active_model ?? selectedProvider.models[0]?.model_name ?? '',
     })
     : null;
+  const trendData = metrics?.trend ?? [];
 
   if (isLoading) {
     return (
@@ -683,68 +723,67 @@ export function AdminPage() {
             ))}
           </div>
         </div>
+        <div className="mb-3 flex flex-wrap items-center gap-4 text-xs font-medium text-[#728095]">
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-sm bg-[#2563eb]" />
+            登录用户
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-sm bg-[#16a34a]" />
+            游客
+          </span>
+        </div>
         <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={metrics?.trend ?? []} margin={{ top: 10, right: 18, left: -12, bottom: 0 }}>
-              <CartesianGrid vertical={false} strokeDasharray="4 8" stroke="#e7edf5" />
-              <XAxis
-                dataKey="bucket_at"
-                tickFormatter={(value) => formatTrendTick(String(value), range)}
-                axisLine={false}
-                tickLine={false}
-                tickMargin={12}
-                tick={{ fill: '#728095', fontSize: 12 }}
-              />
-              <YAxis
-                allowDecimals={false}
-                axisLine={false}
-                tickLine={false}
-                tickMargin={10}
-                tick={{ fill: '#728095', fontSize: 12 }}
-              />
-              <Tooltip
-                labelFormatter={(value) => new Date(String(value)).toLocaleString()}
-                contentStyle={{
-                  border: '1px solid rgba(226, 232, 240, 0.9)',
-                  borderRadius: 16,
-                  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.12)',
-                }}
-              />
-              <Line
-                type="natural"
-                dataKey="count"
-                stroke="#ff7a00"
-                strokeWidth={3}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                dot={false}
-                activeDot={{ r: 5, strokeWidth: 2 }}
-                name="总在线"
-              />
-              <Line
-                type="natural"
-                dataKey="authenticated_count"
-                stroke="#2563eb"
-                strokeWidth={3}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                dot={false}
-                activeDot={{ r: 5, strokeWidth: 2 }}
-                name="登录用户"
-              />
-              <Line
-                type="natural"
-                dataKey="guest_count"
-                stroke="#16a34a"
-                strokeWidth={3}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                dot={false}
-                activeDot={{ r: 5, strokeWidth: 2 }}
-                name="游客"
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          {trendData.length === 0 ? (
+            <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 text-sm text-[#728095]">
+              暂无趋势数据
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={trendData}
+                margin={{ top: 8, right: 18, left: -12, bottom: 0 }}
+                barCategoryGap={range === '24h' ? '36%' : '28%'}
+              >
+                <CartesianGrid vertical={false} strokeDasharray="4 8" stroke="#e7edf5" />
+                <XAxis
+                  dataKey="bucket_at"
+                  tickFormatter={(value) => formatTrendTick(String(value), range)}
+                  axisLine={false}
+                  tickLine={false}
+                  tickMargin={12}
+                  minTickGap={28}
+                  tick={{ fill: '#728095', fontSize: 12 }}
+                />
+                <YAxis
+                  allowDecimals={false}
+                  axisLine={false}
+                  tickLine={false}
+                  tickMargin={10}
+                  domain={[0, 'dataMax + 1']}
+                  tick={{ fill: '#728095', fontSize: 12 }}
+                />
+                <Tooltip
+                  cursor={{ fill: 'rgba(37, 99, 235, 0.06)' }}
+                  content={<OnlineTrendTooltip />}
+                />
+                <Bar
+                  dataKey="authenticated_count"
+                  stackId="online"
+                  fill="#2563eb"
+                  name="登录用户"
+                  maxBarSize={28}
+                />
+                <Bar
+                  dataKey="guest_count"
+                  stackId="online"
+                  fill="#16a34a"
+                  name="游客"
+                  maxBarSize={28}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </section>
 

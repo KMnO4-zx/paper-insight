@@ -2583,6 +2583,7 @@ def record_presence_snapshot(timeout_seconds: int, retention_days: int) -> dict:
 
 def get_presence_trend(range_name: str) -> list[dict]:
     hours = 24 if range_name == "24h" else 24 * 7
+    bucket_interval = "30 minutes" if range_name == "24h" else "6 hours"
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     def operation() -> list[dict]:
@@ -2590,12 +2591,38 @@ def get_presence_trend(range_name: str) -> list[dict]:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT bucket_at, total_count, authenticated_count, guest_count
-                    FROM presence_snapshots
-                    WHERE bucket_at >= %s
+                    WITH bucketed_snapshots AS (
+                      SELECT
+                        date_bin(%s::interval, bucket_at, TIMESTAMPTZ '2000-01-01') AS trend_bucket_at,
+                        bucket_at AS snapshot_at,
+                        total_count,
+                        authenticated_count,
+                        guest_count
+                      FROM presence_snapshots
+                      WHERE bucket_at >= %s
+                    ),
+                    ranked_snapshots AS (
+                      SELECT
+                        trend_bucket_at,
+                        total_count,
+                        authenticated_count,
+                        guest_count,
+                        ROW_NUMBER() OVER (
+                          PARTITION BY trend_bucket_at
+                          ORDER BY total_count DESC, snapshot_at DESC
+                        ) AS bucket_rank
+                      FROM bucketed_snapshots
+                    )
+                    SELECT
+                      trend_bucket_at AS bucket_at,
+                      total_count,
+                      authenticated_count,
+                      guest_count
+                    FROM ranked_snapshots
+                    WHERE bucket_rank = 1
                     ORDER BY bucket_at
                     """,
-                    (since,),
+                    (bucket_interval, since),
                 )
                 rows = cur.fetchall()
         return [
