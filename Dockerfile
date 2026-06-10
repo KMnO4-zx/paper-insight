@@ -17,7 +17,7 @@ COPY ./ /app
 COPY --from=frontend-builder /app/frontend-react/dist /app/frontend-react/dist
 
 # 安装依赖
-RUN pip install --no-cache-dir fastapi uvicorn openai 'psycopg[binary]' requests sse-starlette tiktoken pyyaml argon2-cffi
+RUN pip install --no-cache-dir fastapi uvicorn openai 'psycopg[binary]' requests sse-starlette tiktoken pyyaml argon2-cffi pypdf
 
 # 在 backend 目录下启动，端口等配置来自 /app/config.yaml
 WORKDIR /app/backend
