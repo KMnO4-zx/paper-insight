@@ -20,6 +20,7 @@ https://paper-insight.herobase.tech
 Currently supported:
 
 - [ICLR 2026](https://paper-insight.herobase.tech/conference/iclr_2026)
+- [CHI 2026](https://paper-insight.herobase.tech/conference/chi_2026)
 - [NeurIPS 2025](https://paper-insight.herobase.tech/conference/neurips_2025)
 - [ICML 2025](https://paper-insight.herobase.tech/conference/icml_2025)
 - [Hugging Face Daily Papers](https://paper-insight.herobase.tech/hf-daily)

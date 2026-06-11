@@ -388,11 +388,13 @@ export function getVenueParts(venue?: string | null): { label: string; conferenc
       ? 'ICLR'
       : lower.includes('icml')
         ? 'ICML'
-        : lower.includes('hugging face')
-          ? 'Hugging Face'
-          : lower.includes('arxiv')
-            ? 'arXiv'
-            : venue.split(' ')[0];
+        : /\bchi\b/.test(lower)
+          ? 'CHI'
+          : lower.includes('hugging face')
+            ? 'Hugging Face'
+            : lower.includes('arxiv')
+              ? 'arXiv'
+              : venue.split(' ')[0];
 
   const type = lower.includes('oral')
     ? 'Oral'

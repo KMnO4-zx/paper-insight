@@ -1715,7 +1715,12 @@ async def get_conference_papers_endpoint(
     search_abstract: bool = True,
     search_keywords: bool = True
 ):
-    venue_map = {"neurips_2025": "NeurIPS 2025", "iclr_2026": "ICLR 2026", "icml_2025": "ICML 2025"}
+    venue_map = {
+        "neurips_2025": "NeurIPS 2025",
+        "iclr_2026": "ICLR 2026",
+        "icml_2025": "ICML 2025",
+        "chi_2026": "CHI 2026",
+    }
     venue_name = venue_map.get(venue)
     if not venue_name:
         raise HTTPException(status_code=404, detail="Conference not found")

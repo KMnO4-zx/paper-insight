@@ -13,6 +13,7 @@
 
 - `scripts/apply_migrations.py`：按顺序执行 `db/migrations/*.sql`
 - `scripts/import_papers.py`：将 `crawled_data/{conference}` 下的 JSONL 导入 PostgreSQL
+- `scripts/build_chi_2026_jsonl.py`：从 DBLP + OpenAlex 生成 CHI 2026 的导入 JSONL
 - `scripts/export_supabase.sh`：使用 `pg_dump` 导出 Supabase schema 和 data
 - `scripts/restore_supabase_dump.sh`：将导出的 `supabase_data.dump` 恢复到本地 PostgreSQL
 - `scripts/migrate_db.sql`：单文件版完整 migration，方便手动执行
@@ -45,6 +46,8 @@ uv run python scripts/apply_migrations.py --seed dev
 uv run python scripts/import_papers.py --conference neurips_2025
 uv run python scripts/import_papers.py --conference iclr_2026
 uv run python scripts/import_papers.py --conference icml_2025
+uv run python scripts/build_chi_2026_jsonl.py
+uv run python scripts/import_papers.py --conference chi_2026
 ```
 
 ## 维护者：从 Supabase 导出现有数据

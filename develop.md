@@ -180,11 +180,14 @@ uv run python scripts/apply_migrations.py
 uv run python scripts/import_papers.py --conference neurips_2025
 uv run python scripts/import_papers.py --conference iclr_2026
 uv run python scripts/import_papers.py --conference icml_2025
+uv run python scripts/build_chi_2026_jsonl.py
+uv run python scripts/import_papers.py --conference chi_2026
 ```
 
 说明：
 
 - 数据源目录固定为 `crawled_data/{conference}/`
+- CHI 2026 的元数据源是 DBLP + OpenAlex，先用 `scripts/build_chi_2026_jsonl.py` 生成 `crawled_data/chi_2026/main_papers.jsonl`
 - 导入是按论文覆盖式刷新
 - `papers` 会 upsert
 - 对应论文的 `authors` / `keywords` 会先删后插
