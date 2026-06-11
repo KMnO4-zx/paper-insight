@@ -40,22 +40,22 @@ export function SearchControls({
   };
 
   const panelClassName = hero
-    ? 'rounded-[28px] bg-white/90 p-6 shadow-sm ring-1 ring-black/5 sm:p-8 lg:p-9'
+    ? 'rounded-[28px] bg-white/90 p-5 shadow-sm ring-1 ring-black/5 sm:p-6 lg:p-6'
     : `rounded-2xl bg-white/90 shadow-sm ring-1 ring-black/5 ${compact ? 'p-4' : 'p-8'}`;
   const filtersClassName = hero
-    ? 'mb-7 flex flex-wrap items-center justify-center gap-x-9 gap-y-3'
+    ? 'mb-5 flex flex-wrap items-center justify-center gap-x-7 gap-y-3'
     : `mb-4 flex flex-wrap items-center gap-5 ${compact ? 'justify-start' : 'justify-center'}`;
   const rowClassName = hero
     ? 'flex flex-col items-stretch gap-4 sm:flex-row'
     : `flex ${compact ? 'flex-col gap-3 sm:flex-row' : 'gap-3'} items-stretch`;
   const inputClassName = hero
-    ? 'h-16 rounded-[1.25rem] border-2 border-[#ff9900] bg-[#f6f8fb] pl-14 text-lg shadow-none transition hover:border-[#ff7a00] focus-visible:border-[#ff7a00] focus-visible:ring-0'
+    ? 'h-14 rounded-[1.25rem] border-2 border-[#ff9900] bg-[#f6f8fb] pl-14 text-base shadow-none transition hover:border-[#ff7a00] focus-visible:border-[#ff7a00] focus-visible:ring-0'
     : 'h-12 rounded-xl border-2 border-transparent bg-[#f6f8fb] pl-11 text-base shadow-none transition hover:border-[#d7dfe8] focus-visible:border-[#ff9900] focus-visible:ring-0';
   const searchIconClassName = hero
     ? 'pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-[#7a8799]'
     : 'pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7a8799]';
   const buttonClassName = hero
-    ? 'h-16 rounded-[1.25rem] bg-gradient-to-r from-[#ff9900] to-[#ff7a00] px-8 text-base font-semibold text-white hover:from-[#ff7a00] hover:to-[#ff9900] sm:min-w-[8rem]'
+    ? 'h-14 rounded-[1.25rem] bg-gradient-to-r from-[#ff9900] to-[#ff7a00] px-8 text-base font-semibold text-white hover:from-[#ff7a00] hover:to-[#ff9900] sm:min-w-[8rem]'
     : 'h-12 rounded-xl bg-gradient-to-r from-[#ff9900] to-[#ff7a00] px-6 font-semibold text-white hover:from-[#ff7a00] hover:to-[#ff9900]';
 
   return (

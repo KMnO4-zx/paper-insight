@@ -7,6 +7,11 @@ import { useAuth } from '@/lib/auth';
 import { navigate, useAppLocation } from '@/lib/router';
 import { getUserId } from '@/lib/storage';
 
+const navDockButtonClass =
+  'h-9 rounded-full border border-transparent bg-transparent px-3 text-sm font-semibold text-[#425166] shadow-none transition hover:border-white/80 hover:bg-white/78 hover:text-[#172033] hover:shadow-[0_10px_28px_rgba(15,23,42,0.08)]';
+const navDockActiveButtonClass =
+  'h-9 rounded-full border border-white/80 bg-white/82 px-3 text-sm font-semibold text-[#172033] shadow-[0_10px_28px_rgba(15,23,42,0.08)] transition hover:bg-white hover:text-[#172033]';
+
 export function SiteNavbar() {
   const location = useAppLocation();
   const { user, logout } = useAuth();
@@ -88,14 +93,14 @@ export function SiteNavbar() {
             alt="Paper Insight logo"
             className="h-11 w-11 rounded-2xl object-contain shadow-sm transition-transform duration-300 group-hover:scale-[1.04]"
           />
-          <div className="text-left">
+          <div className="hidden text-left sm:block">
             <div className="font-semibold tracking-tight text-[#1b2333]">Paper Insight</div>
             <div className="text-xs text-[#728095]">AI-driven paper analysis</div>
           </div>
         </button>
 
-        <div className="flex items-center gap-2">
-          <div className="hidden shrink-0 items-center gap-2 rounded-full bg-white/80 px-4 py-2 text-sm text-[#586578] shadow-sm ring-1 ring-black/5 md:flex">
+        <div className="flex min-w-0 items-center gap-1.5 rounded-full border border-white/70 bg-white/48 p-1 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+          <div className="hidden h-9 shrink-0 items-center gap-2 rounded-full border border-transparent px-3 text-sm font-medium text-[#526174] md:flex">
             <Radio className="h-4 w-4 text-[#16a34a]" />
             <span>{onlineCount} 人在线</span>
           </div>
@@ -103,45 +108,45 @@ export function SiteNavbar() {
             <>
               <Button
                 variant="outline"
-                className="rounded-full border-[#bfdbfe] bg-[#eff6ff] text-[#2563eb]"
+                className={location.pathname === '/me' ? navDockActiveButtonClass : navDockButtonClass}
                 onClick={() => navigate('/me')}
               >
-                <BookMarked className="mr-2 h-4 w-4" />
-                我的论文
+                <BookMarked className="mr-2 h-4 w-4 text-[#2563eb]" />
+                <span className="hidden sm:inline">我的论文</span>
               </Button>
               {user.role === 'admin' ? (
                 <Button
                   variant="outline"
-                  className="rounded-full border-[#fed7aa] bg-[#fff7ed] text-[#c2410c]"
+                  className={location.pathname === '/admin' ? navDockActiveButtonClass : navDockButtonClass}
                   onClick={() => navigate('/admin')}
                 >
-                  <Shield className="mr-2 h-4 w-4" />
-                  后台
+                  <Shield className="mr-2 h-4 w-4 text-[#c2410c]" />
+                  <span className="hidden sm:inline">后台</span>
                 </Button>
               ) : null}
-              <div className="hidden max-w-[14rem] truncate rounded-full bg-white/80 px-4 py-2 text-sm text-[#586578] shadow-sm ring-1 ring-black/5 lg:block">
+              <div className="hidden h-9 max-w-[14rem] items-center truncate rounded-full border border-white/70 bg-white/55 px-3 text-sm text-[#586578] lg:flex">
                 {user.email}
               </div>
               <Button
                 variant="outline"
-                className="rounded-full border-[#d7dde8] bg-[#f8fafc] text-[#243047]"
+                className={navDockButtonClass}
                 onClick={() => void logout()}
               >
-                <LogOut className="mr-2 h-4 w-4" />
-                退出
+                <LogOut className="mr-2 h-4 w-4 text-[#64748b]" />
+                <span className="hidden sm:inline">退出</span>
               </Button>
             </>
           ) : (
             <>
               <Button
                 variant="outline"
-                className="rounded-full border-[#fed7aa] bg-[#fff7ed] text-[#c2410c]"
+                className={navDockButtonClass}
                 onClick={() => navigate('/login')}
               >
                 登录
               </Button>
               <Button
-                className="rounded-full bg-gradient-to-r from-[#ff9900] to-[#ff7a00] text-white"
+                className="h-9 rounded-full bg-gradient-to-r from-[#ff9900] to-[#ff7a00] px-4 text-sm font-semibold text-white shadow-[0_12px_34px_rgba(255,122,0,0.28)] transition hover:from-[#ff8a00] hover:to-[#ff6f00]"
                 onClick={() => navigate('/register')}
               >
                 注册
@@ -150,17 +155,17 @@ export function SiteNavbar() {
           )}
           <Button
             variant="outline"
-            className="rounded-full border-[#f3d7df] bg-[#fff6f8] text-[#d84b72] hover:border-[#edbfd0] hover:bg-[#ffeef3] hover:text-[#c93c64]"
+            className={`${navDockButtonClass} hidden sm:inline-flex`}
             onClick={() => window.open('https://www.xiaohongshu.com/user/profile/63c2055e000000002502c58c', '_blank', 'noopener,noreferrer')}
           >
             小红书
           </Button>
           <Button
             variant="outline"
-            className="rounded-full border-[#d7dde8] bg-[#f8fafc] text-[#243047] hover:border-[#c6d0de] hover:bg-[#eef2f7] hover:text-[#162033]"
+            className={`${navDockButtonClass} hidden sm:inline-flex`}
             onClick={() => window.open('https://github.com/KMnO4-zx/paper_online', '_blank', 'noopener,noreferrer')}
           >
-            <Github className="mr-2 h-4 w-4" />
+            <Github className="mr-2 h-4 w-4 text-[#334155]" />
             GitHub
           </Button>
         </div>
