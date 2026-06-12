@@ -151,6 +151,8 @@ export function ConferencePage({ venue }: ConferencePageProps) {
               paper={paper}
               index={index}
               onOpen={(nextPaper) => navigate(`/papers/${nextPaper.id}`)}
+              searchQuery={query}
+              searchFilters={filters}
             />
           ))}
         </div>

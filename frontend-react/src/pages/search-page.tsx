@@ -146,6 +146,8 @@ export function SearchPage() {
               paper={paper}
               index={index}
               onOpen={(nextPaper) => navigate(`/papers/${nextPaper.id}`)}
+              searchQuery={query}
+              searchFilters={filters}
             />
           ))}
         </div>

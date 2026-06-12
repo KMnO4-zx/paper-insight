@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { normalizeMarkdownContent, splitStreamingMarkdown } from '@/lib/content';
+import { createSearchHighlightRehypePlugin } from '@/lib/search-highlight';
 
 interface RichContentProps {
   content: string;
@@ -13,6 +14,7 @@ interface RichContentProps {
   inline?: boolean;
   analysisMode?: boolean;
   isStreaming?: boolean;
+  highlightTerms?: string[];
 }
 
 const blockComponents: Components = {
@@ -43,14 +45,25 @@ const inlineComponents: Components = {
 function MarkdownAst({
   content,
   components,
+  highlightTerms = [],
 }: {
   content: string;
   components: Components;
+  highlightTerms?: string[];
 }) {
+  const rehypePlugins = useMemo(
+    () => (
+      highlightTerms.length
+        ? [rehypeKatex, createSearchHighlightRehypePlugin(highlightTerms)]
+        : [rehypeKatex]
+    ),
+    [highlightTerms],
+  );
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
+      rehypePlugins={rehypePlugins}
       skipHtml
       components={components}
     >
@@ -65,6 +78,7 @@ export function RichContent({
   inline = false,
   analysisMode = false,
   isStreaming = false,
+  highlightTerms = [],
 }: RichContentProps) {
   const normalizedContent = useMemo(
     () => normalizeMarkdownContent(content, { analysisMode }),
@@ -78,7 +92,7 @@ export function RichContent({
   if (inline) {
     return (
       <span className={className}>
-        <MarkdownAst content={normalizedContent} components={inlineComponents} />
+        <MarkdownAst content={normalizedContent} components={inlineComponents} highlightTerms={highlightTerms} />
       </span>
     );
   }
@@ -88,7 +102,9 @@ export function RichContent({
 
   return (
     <div className={className}>
-      {stableContent ? <MarkdownAst content={stableContent} components={blockComponents} /> : null}
+      {stableContent ? (
+        <MarkdownAst content={stableContent} components={blockComponents} highlightTerms={highlightTerms} />
+      ) : null}
       {unstableContent ? <pre className="rich-content-tail">{unstableContent}</pre> : null}
     </div>
   );

@@ -270,6 +270,7 @@
 
   .paper-search-shell {
     position: relative;
+    z-index: 20;
     max-width: 58rem;
     border-radius: 2rem;
     padding: 1px;
@@ -282,6 +283,14 @@
     background: rgba(255, 255, 255, 0.84);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
+  }
+
+  .search-match-highlight {
+    border-radius: 0.28em;
+    background: #b6f4a6;
+    box-shadow: inset 0 -0.08em rgba(46, 125, 50, 0.32);
+    color: inherit;
+    padding: 0 0.08em;
   }
 
   .paper-signal-tile {

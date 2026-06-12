@@ -1,6 +1,7 @@
 import { Bookmark, CalendarDays, Eye, Heart, Star, ThumbsUp } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import { HighlightedText } from '@/components/search-highlight';
 import { RichContent } from '@/components/rich-content';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,12 +9,15 @@ import { fetchPaperMarks, updatePaperMark } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { getVenueParts, normalizeKeywords } from '@/lib/content';
 import { navigate } from '@/lib/router';
-import type { Paper } from '@/types';
+import { buildSearchHighlightTerms } from '@/lib/search-highlight';
+import type { Paper, SearchFilters } from '@/types';
 
 interface PaperCardProps {
   paper: Paper;
   index: number;
   onOpen: (paper: Paper) => void;
+  searchQuery?: string;
+  searchFilters?: SearchFilters;
 }
 
 const EMPTY_MARKS = { viewed: false, liked: false, favorited: false };
@@ -61,11 +65,15 @@ function formatDate(value?: string | null): string | null {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function PaperCard({ paper, index, onOpen }: PaperCardProps) {
+export function PaperCard({ paper, index, onOpen, searchQuery = '', searchFilters }: PaperCardProps) {
   const { user, isLoading } = useAuth();
   const [marks, setMarks] = useState(EMPTY_MARKS);
   const [isLikeAnimating, setIsLikeAnimating] = useState(false);
   const keywords = normalizeKeywords(paper.keywords).slice(0, 6);
+  const highlightTerms = useMemo(() => buildSearchHighlightTerms(searchQuery), [searchQuery]);
+  const titleHighlightTerms = searchFilters?.title ? highlightTerms : [];
+  const abstractHighlightTerms = searchFilters?.abstract ? highlightTerms : [];
+  const keywordHighlightTerms = searchFilters?.keywords ? highlightTerms : [];
   const venue = getVenueParts(paper.venue);
   const isHfDaily = venue.conference === 'Hugging Face';
   const isArxiv = venue.conference === 'arXiv';
@@ -137,7 +145,7 @@ export function PaperCard({ paper, index, onOpen }: PaperCardProps) {
       </div>
 
       <h3 className="mb-3 text-xl font-semibold leading-snug text-[#1f2937] transition-colors group-hover:text-[#ff7a00]">
-        <RichContent content={paper.title} inline className="paper-title-math" />
+        <RichContent content={paper.title} inline className="paper-title-math" highlightTerms={titleHighlightTerms} />
       </h3>
 
       {keywords.length ? (
@@ -147,14 +155,14 @@ export function PaperCard({ paper, index, onOpen }: PaperCardProps) {
               key={`${paper.id}-${keyword}`}
               className={`rounded-full border px-2.5 py-1 text-xs ${getKeywordColor(keywordIndex)}`}
             >
-              {keyword}
+              <HighlightedText text={keyword} terms={keywordHighlightTerms} />
             </span>
           ))}
         </div>
       ) : null}
 
       <p className="mb-5 line-clamp-3 text-sm leading-6 text-[#67758a]">
-        {paper.abstract || '暂无摘要'}
+        <HighlightedText text={paper.abstract || '暂无摘要'} terms={abstractHighlightTerms} />
       </p>
 
       {isHfDaily && hfDailyDateLabel ? (

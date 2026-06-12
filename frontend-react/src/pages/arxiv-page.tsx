@@ -436,6 +436,8 @@ export function ArxivPage() {
                       paper={paper}
                       index={index}
                       onOpen={(nextPaper) => navigate(`/papers/${encodeURIComponent(nextPaper.id)}`)}
+                      searchQuery={query}
+                      searchFilters={filters}
                     />
                   </div>
                 );
