@@ -1,6 +1,6 @@
 <div align='center'>
 
-<img src="./images/readme-head.png" alt="Paper Insight research workflow" width="92%">
+<img src="./images/head.png" alt="Paper Insight research workflow" width="92%">
 <h1><a href="https://paper-insight.herobase.tech">Paper Insight</a></h1>
 <p><strong>在论文海里先看见值得精读的信号。</strong></p>
 <p>为每天至少 5 篇论文的研究节奏而设计：会议浏览、arXiv 分析、论文对话和个人论文库。</p>
