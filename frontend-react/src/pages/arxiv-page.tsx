@@ -4,11 +4,22 @@ import { CalendarDays, ChevronLeft, FileText, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PaginationBar } from '@/components/pagination-bar';
 import { PaperCard } from '@/components/paper-card';
+import { PaperReadFilterBar } from '@/components/paper-read-filter-bar';
 import { SearchControls } from '@/components/search-controls';
 import { createArxivPaper, fetchArxivPapers } from '@/lib/api';
 import { extractArxivId } from '@/lib/arxiv';
-import { applyFilters, buildQueryString, navigate, parseFilters, parsePage, useAppLocation } from '@/lib/router';
-import type { Paper, PaperListResponse, SearchFilters } from '@/types';
+import { useAuth } from '@/lib/auth';
+import {
+  applyFilters,
+  applyReadFilter,
+  buildQueryString,
+  navigate,
+  parseFilters,
+  parsePage,
+  parseReadFilter,
+  useAppLocation,
+} from '@/lib/router';
+import type { Paper, PaperListResponse, PaperReadFilter, SearchFilters } from '@/types';
 
 const EMPTY_RESULTS: PaperListResponse = {
   papers: [],
@@ -177,13 +188,15 @@ function ArxivTimeline({ items, activeDate, onSelectDate, compact = false }: Arx
 
 export function ArxivPage() {
   const location = useAppLocation();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const listRef = useRef<HTMLDivElement | null>(null);
-  const { query, page, filters } = useMemo(() => {
+  const { query, page, filters, readFilter } = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return {
       query: params.get('q') ?? '',
       page: parsePage(params.get('page')),
       filters: parseFilters(params),
+      readFilter: parseReadFilter(params.get('read')),
     };
   }, [location.search]);
 
@@ -194,6 +207,7 @@ export function ArxivPage() {
   const [error, setError] = useState<string | null>(null);
   const [isAddingArxiv, setIsAddingArxiv] = useState(false);
   const [arxivSubmitError, setArxivSubmitError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const timelineItems = useMemo(() => buildTimelineItems(results.papers), [results.papers]);
   const [activeDate, setActiveDate] = useState<string | null>(null);
   const detectedArxivId = extractArxivId(draftQuery);
@@ -204,11 +218,15 @@ export function ArxivPage() {
   }, [query, filters]);
 
   useEffect(() => {
+    if (isAuthLoading) {
+      return;
+    }
     let active = true;
     setIsLoading(true);
     setError(null);
+    const effectiveReadFilter = user ? readFilter : 'all';
 
-    void fetchArxivPapers(page, query, filters)
+    void fetchArxivPapers(page, query, filters, 8, effectiveReadFilter)
       .then((payload) => {
         if (active) {
           setResults(payload);
@@ -229,7 +247,7 @@ export function ArxivPage() {
     return () => {
       active = false;
     };
-  }, [page, query, filters]);
+  }, [isAuthLoading, page, query, filters, readFilter, refreshVersion, user]);
 
   useEffect(() => {
     setActiveDate(timelineItems[0]?.date ?? null);
@@ -318,6 +336,14 @@ export function ArxivPage() {
       next.set('q', trimmedQuery);
       applyFilters(next, draftFilters);
     }
+    applyReadFilter(next, user ? readFilter : 'all');
+    navigate(`/arxiv${buildQueryString(next)}`);
+  };
+
+  const onReadFilterChange = (nextReadFilter: PaperReadFilter) => {
+    const next = new URLSearchParams(location.search);
+    applyReadFilter(next, nextReadFilter);
+    next.delete('page');
     navigate(`/arxiv${buildQueryString(next)}`);
   };
 
@@ -330,6 +356,13 @@ export function ArxivPage() {
   };
 
   const hasTimeline = timelineItems.length > 0;
+  const activeReadFilter = user ? readFilter : 'all';
+  const resultSummary =
+    activeReadFilter === 'unread'
+      ? `未读 ${results.total} 篇论文`
+      : activeReadFilter === 'read'
+        ? `已读 ${results.total} 篇论文`
+        : `共 ${results.total} 篇论文`;
 
   return (
     <div className={hasTimeline ? 'mx-auto max-w-7xl animate-fade-in' : 'mx-auto max-w-6xl animate-fade-in'}>
@@ -378,8 +411,17 @@ export function ArxivPage() {
             </div>
           ) : null}
 
-          <div className="mt-6 rounded-[28px] bg-white/70 p-4 text-sm text-[#596579] shadow-sm ring-1 ring-black/5">
-            共 {results.total} 篇论文
+          <div className="mt-6">
+            <PaperReadFilterBar
+              value={activeReadFilter}
+              counts={results.read_counts}
+              disabled={!user || isAuthLoading}
+              onChange={onReadFilterChange}
+            />
+          </div>
+
+          <div className="mt-4 rounded-[28px] bg-white/70 p-4 text-sm text-[#596579] shadow-sm ring-1 ring-black/5">
+            {resultSummary}
           </div>
 
           <div className="sticky top-24 z-20 mt-4 lg:hidden">
@@ -438,6 +480,7 @@ export function ArxivPage() {
                       onOpen={(nextPaper) => navigate(`/papers/${encodeURIComponent(nextPaper.id)}`)}
                       searchQuery={query}
                       searchFilters={filters}
+                      onMarkChange={() => setRefreshVersion((version) => version + 1)}
                     />
                   </div>
                 );

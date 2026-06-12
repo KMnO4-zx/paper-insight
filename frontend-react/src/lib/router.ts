@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import type { SearchFilters } from '@/types';
+import type { PaperReadFilter, SearchFilters } from '@/types';
 
 export interface AppLocation {
   pathname: string;
@@ -55,6 +55,19 @@ export function applyFilters(params: URLSearchParams, filters: SearchFilters): U
   params.set('title', String(filters.title));
   params.set('abstract', String(filters.abstract));
   params.set('keywords', String(filters.keywords));
+  return params;
+}
+
+export function parseReadFilter(value: string | null): PaperReadFilter {
+  return value === 'unread' || value === 'read' ? value : 'all';
+}
+
+export function applyReadFilter(params: URLSearchParams, readFilter: PaperReadFilter): URLSearchParams {
+  if (readFilter === 'all') {
+    params.delete('read');
+  } else {
+    params.set('read', readFilter);
+  }
   return params;
 }
 

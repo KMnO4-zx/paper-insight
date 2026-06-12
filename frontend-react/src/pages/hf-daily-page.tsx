@@ -4,10 +4,12 @@ import { CalendarDays, ChevronLeft, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PaginationBar } from '@/components/pagination-bar';
 import { PaperCard } from '@/components/paper-card';
+import { PaperReadFilterBar } from '@/components/paper-read-filter-bar';
 import { SearchControls } from '@/components/search-controls';
 import { fetchHfDailyPapers } from '@/lib/api';
-import { buildQueryString, navigate, parseFilters, parsePage, useAppLocation } from '@/lib/router';
-import type { Paper, PaperListResponse, SearchFilters } from '@/types';
+import { useAuth } from '@/lib/auth';
+import { applyReadFilter, buildQueryString, navigate, parseFilters, parsePage, parseReadFilter, useAppLocation } from '@/lib/router';
+import type { Paper, PaperListResponse, PaperReadFilter, SearchFilters } from '@/types';
 
 const EMPTY_RESULTS: PaperListResponse = {
   papers: [],
@@ -206,13 +208,15 @@ function HfDailyTimeline({ items, activeDate, onSelectDate, compact = false }: H
 
 export function HfDailyPage() {
   const location = useAppLocation();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const listRef = useRef<HTMLDivElement | null>(null);
-  const { query, page, filters } = useMemo(() => {
+  const { query, page, filters, readFilter } = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return {
       query: params.get('q') ?? '',
       page: parsePage(params.get('page')),
       filters: parseFilters(params),
+      readFilter: parseReadFilter(params.get('read')),
     };
   }, [location.search]);
 
@@ -221,6 +225,7 @@ export function HfDailyPage() {
   const [results, setResults] = useState<PaperListResponse>(EMPTY_RESULTS);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const sortedPapers = useMemo(() => [...results.papers].sort(compareHfDailyPapers), [results.papers]);
   const timelineItems = useMemo(() => buildTimelineItems(sortedPapers), [sortedPapers]);
   const [activeDate, setActiveDate] = useState<string | null>(null);
@@ -231,11 +236,15 @@ export function HfDailyPage() {
   }, [query, filters]);
 
   useEffect(() => {
+    if (isAuthLoading) {
+      return;
+    }
     let active = true;
     setIsLoading(true);
     setError(null);
+    const effectiveReadFilter = user ? readFilter : 'all';
 
-    void fetchHfDailyPapers(page, query, filters)
+    void fetchHfDailyPapers(page, query, filters, effectiveReadFilter)
       .then((payload) => {
         if (active) {
           setResults(payload);
@@ -256,7 +265,7 @@ export function HfDailyPage() {
     return () => {
       active = false;
     };
-  }, [page, query, filters]);
+  }, [isAuthLoading, page, query, filters, readFilter, refreshVersion, user]);
 
   useEffect(() => {
     setActiveDate(timelineItems[0]?.date ?? null);
@@ -320,12 +329,20 @@ export function HfDailyPage() {
       next.set('abstract', String(draftFilters.abstract));
       next.set('keywords', String(draftFilters.keywords));
     }
+    applyReadFilter(next, user ? readFilter : 'all');
     navigate(`/hf-daily${buildQueryString(next)}`);
   };
 
   const onPageChange = (nextPage: number) => {
     const next = new URLSearchParams(location.search);
     next.set('page', String(nextPage));
+    navigate(`/hf-daily${buildQueryString(next)}`);
+  };
+
+  const onReadFilterChange = (nextReadFilter: PaperReadFilter) => {
+    const next = new URLSearchParams(location.search);
+    applyReadFilter(next, nextReadFilter);
+    next.delete('page');
     navigate(`/hf-daily${buildQueryString(next)}`);
   };
 
@@ -338,6 +355,13 @@ export function HfDailyPage() {
   };
 
   const hasTimeline = timelineItems.length > 0;
+  const activeReadFilter = user ? readFilter : 'all';
+  const resultSummary =
+    activeReadFilter === 'unread'
+      ? `未读 ${results.total} 篇论文`
+      : activeReadFilter === 'read'
+        ? `已读 ${results.total} 篇论文`
+        : `共 ${results.total} 篇论文`;
 
   return (
     <div className={hasTimeline ? 'mx-auto max-w-7xl animate-fade-in' : 'mx-auto max-w-6xl animate-fade-in'}>
@@ -372,8 +396,17 @@ export function HfDailyPage() {
             compact
           />
 
-          <div className="mt-6 rounded-[28px] bg-white/70 p-4 text-sm text-[#596579] shadow-sm ring-1 ring-black/5">
-            共 {results.total} 篇论文
+          <div className="mt-6">
+            <PaperReadFilterBar
+              value={activeReadFilter}
+              counts={results.read_counts}
+              disabled={!user || isAuthLoading}
+              onChange={onReadFilterChange}
+            />
+          </div>
+
+          <div className="mt-4 rounded-[28px] bg-white/70 p-4 text-sm text-[#596579] shadow-sm ring-1 ring-black/5">
+            {resultSummary}
           </div>
 
           <div className="sticky top-24 z-20 mt-4 lg:hidden">
@@ -432,6 +465,7 @@ export function HfDailyPage() {
                       onOpen={(nextPaper) => navigate(`/papers/${nextPaper.id}`)}
                       searchQuery={query}
                       searchFilters={filters}
+                      onMarkChange={() => setRefreshVersion((version) => version + 1)}
                     />
                   </div>
                 );

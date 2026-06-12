@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/auth';
 import { getVenueParts, normalizeKeywords } from '@/lib/content';
 import { navigate } from '@/lib/router';
 import { buildSearchHighlightTerms } from '@/lib/search-highlight';
-import type { Paper, SearchFilters } from '@/types';
+import type { Paper, PaperMark, SearchFilters } from '@/types';
 
 interface PaperCardProps {
   paper: Paper;
@@ -18,6 +18,7 @@ interface PaperCardProps {
   onOpen: (paper: Paper) => void;
   searchQuery?: string;
   searchFilters?: SearchFilters;
+  onMarkChange?: (paper: Paper, mark: PaperMark) => void;
 }
 
 const EMPTY_MARKS = { viewed: false, liked: false, favorited: false };
@@ -65,7 +66,14 @@ function formatDate(value?: string | null): string | null {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function PaperCard({ paper, index, onOpen, searchQuery = '', searchFilters }: PaperCardProps) {
+export function PaperCard({
+  paper,
+  index,
+  onOpen,
+  searchQuery = '',
+  searchFilters,
+  onMarkChange,
+}: PaperCardProps) {
   const { user, isLoading } = useAuth();
   const [marks, setMarks] = useState(EMPTY_MARKS);
   const [isLikeAnimating, setIsLikeAnimating] = useState(false);
@@ -189,7 +197,10 @@ export function PaperCard({ paper, index, onOpen, searchQuery = '', searchFilter
               if (!requireLogin()) {
                 return;
               }
-              void updatePaperMark(paper.id, { viewed: !marks.viewed }).then(setMarks);
+              void updatePaperMark(paper.id, { viewed: !marks.viewed }).then((nextMark) => {
+                setMarks(nextMark);
+                onMarkChange?.(paper, nextMark);
+              });
             }}
             className={`rounded-full ${
               marks.viewed
@@ -210,7 +221,10 @@ export function PaperCard({ paper, index, onOpen, searchQuery = '', searchFilter
                 return;
               }
               setIsLikeAnimating(true);
-              void updatePaperMark(paper.id, { liked: !marks.liked }).then(setMarks);
+              void updatePaperMark(paper.id, { liked: !marks.liked }).then((nextMark) => {
+                setMarks(nextMark);
+                onMarkChange?.(paper, nextMark);
+              });
               window.setTimeout(() => setIsLikeAnimating(false), 400);
             }}
             className={`rounded-full ${
@@ -231,7 +245,10 @@ export function PaperCard({ paper, index, onOpen, searchQuery = '', searchFilter
               if (!requireLogin()) {
                 return;
               }
-              void updatePaperMark(paper.id, { favorited: !marks.favorited }).then(setMarks);
+              void updatePaperMark(paper.id, { favorited: !marks.favorited }).then((nextMark) => {
+                setMarks(nextMark);
+                onMarkChange?.(paper, nextMark);
+              });
             }}
             className={`rounded-full ${
               marks.favorited

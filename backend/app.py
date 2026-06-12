@@ -53,7 +53,10 @@ from feishu import (
 )
 from database import (
     DatabaseError,
+    count_arxiv_paper_read_states,
     count_active_admins,
+    count_hf_daily_paper_read_states,
+    count_search_paper_read_states,
     count_unanalyzed_papers,
     create_chat_session,
     create_or_link_github_user,
@@ -735,6 +738,17 @@ class LlmModelCreateRequest(BaseModel):
 class LlmActiveRequest(BaseModel):
     provider_id: str
     model_name: str | None = None
+
+
+def validate_read_status(read_status: str) -> str:
+    if read_status not in {"all", "unread", "read"}:
+        raise HTTPException(status_code=400, detail="read_status must be all, unread, or read")
+    return read_status
+
+
+def require_user_for_read_filter(read_status: str, user: dict | None) -> None:
+    if read_status != "all" and not user:
+        raise HTTPException(status_code=401, detail="登录后才能筛选已读状态")
 
 
 def public_user(user: dict) -> dict:
@@ -1920,12 +1934,14 @@ async def regenerate_chat(
 @app.get("/conference/{venue}/papers")
 async def get_conference_papers_endpoint(
     venue: str,
+    request: Request,
     page: int = 1,
     limit: int = 8,
     search: str = "",
     search_title: bool = True,
     search_abstract: bool = True,
-    search_keywords: bool = True
+    search_keywords: bool = True,
+    read_status: str = "all",
 ):
     venue_map = {
         "neurips_2025": "NeurIPS 2025",
@@ -1938,12 +1954,30 @@ async def get_conference_papers_endpoint(
     if not venue_name:
         raise HTTPException(status_code=404, detail="Conference not found")
 
+    validated_read_status = validate_read_status(read_status)
+    user = get_current_user_optional(request)
+    require_user_for_read_filter(validated_read_status, user)
+    user_id = user["id"] if user else None
     offset = (page - 1) * limit
     try:
         papers, total = get_conference_papers(
             venue_name, offset, limit,
             search if search else None,
-            search_title, search_abstract, search_keywords
+            search_title, search_abstract, search_keywords,
+            user_id=user_id,
+            read_status=validated_read_status,
+        )
+        read_counts = (
+            count_search_paper_read_states(
+                venue_name,
+                search if search else None,
+                search_title,
+                search_abstract,
+                search_keywords,
+                user_id,
+            )
+            if user_id
+            else None
         )
     except DatabaseError as e:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from e
@@ -1951,6 +1985,7 @@ async def get_conference_papers_endpoint(
     return {
         "papers": papers,
         "total": total,
+        "read_counts": read_counts,
         "page": page,
         "pages": math.ceil(total / limit) if total > 0 else 1
     }
@@ -1958,13 +1993,19 @@ async def get_conference_papers_endpoint(
 
 @app.get("/hf-daily-papers")
 async def get_hf_daily_papers_endpoint(
+    request: Request,
     page: int = 1,
     limit: int = 8,
     search: str = "",
     search_title: bool = True,
     search_abstract: bool = True,
-    search_keywords: bool = True
+    search_keywords: bool = True,
+    read_status: str = "all",
 ):
+    validated_read_status = validate_read_status(read_status)
+    user = get_current_user_optional(request)
+    require_user_for_read_filter(validated_read_status, user)
+    user_id = user["id"] if user else None
     safe_page = max(page, 1)
     safe_limit = min(max(limit, 1), 100)
     offset = (safe_page - 1) * safe_limit
@@ -1976,6 +2017,19 @@ async def get_hf_daily_papers_endpoint(
             search_title,
             search_abstract,
             search_keywords,
+            user_id=user_id,
+            read_status=validated_read_status,
+        )
+        read_counts = (
+            count_hf_daily_paper_read_states(
+                search if search else None,
+                search_title,
+                search_abstract,
+                search_keywords,
+                user_id,
+            )
+            if user_id
+            else None
         )
     except DatabaseError as e:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from e
@@ -1983,6 +2037,7 @@ async def get_hf_daily_papers_endpoint(
     return {
         "papers": papers,
         "total": total,
+        "read_counts": read_counts,
         "page": safe_page,
         "pages": math.ceil(total / safe_limit) if total > 0 else 1
     }
@@ -1990,13 +2045,19 @@ async def get_hf_daily_papers_endpoint(
 
 @app.get("/arxiv-papers")
 async def get_arxiv_papers_endpoint(
+    request: Request,
     page: int = 1,
     limit: int = 6,
     search: str = "",
     search_title: bool = True,
     search_abstract: bool = True,
     search_keywords: bool = True,
+    read_status: str = "all",
 ):
+    validated_read_status = validate_read_status(read_status)
+    user = get_current_user_optional(request)
+    require_user_for_read_filter(validated_read_status, user)
+    user_id = user["id"] if user else None
     safe_page = max(page, 1)
     safe_limit = min(max(limit, 1), 24)
     offset = (safe_page - 1) * safe_limit
@@ -2009,6 +2070,20 @@ async def get_arxiv_papers_endpoint(
             search_title=search_title,
             search_abstract=search_abstract,
             search_keywords=search_keywords,
+            user_id=user_id,
+            read_status=validated_read_status,
+        )
+        read_counts = (
+            count_arxiv_paper_read_states(
+                True,
+                search if search else None,
+                search_title,
+                search_abstract,
+                search_keywords,
+                user_id,
+            )
+            if user_id
+            else None
         )
     except DatabaseError as e:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from e
@@ -2016,6 +2091,7 @@ async def get_arxiv_papers_endpoint(
     return {
         "papers": papers,
         "total": total,
+        "read_counts": read_counts,
         "page": safe_page,
         "pages": math.ceil(total / safe_limit) if total > 0 else 1
     }
@@ -2023,19 +2099,39 @@ async def get_arxiv_papers_endpoint(
 
 @app.get("/search/papers")
 async def search_all_papers_endpoint(
+    request: Request,
     page: int = 1,
     limit: int = 8,
     search: str = "",
     search_title: bool = True,
     search_abstract: bool = True,
-    search_keywords: bool = True
+    search_keywords: bool = True,
+    read_status: str = "all",
 ):
+    validated_read_status = validate_read_status(read_status)
+    user = get_current_user_optional(request)
+    require_user_for_read_filter(validated_read_status, user)
+    user_id = user["id"] if user else None
     offset = (page - 1) * limit
     try:
         papers, total = search_all_papers(
             offset, limit,
             search if search else None,
-            search_title, search_abstract, search_keywords
+            search_title, search_abstract, search_keywords,
+            user_id=user_id,
+            read_status=validated_read_status,
+        )
+        read_counts = (
+            count_search_paper_read_states(
+                None,
+                search if search else None,
+                search_title,
+                search_abstract,
+                search_keywords,
+                user_id,
+            )
+            if user_id
+            else None
         )
     except DatabaseError as e:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from e
@@ -2043,6 +2139,7 @@ async def search_all_papers_endpoint(
     return {
         "papers": papers,
         "total": total,
+        "read_counts": read_counts,
         "page": page,
         "pages": math.ceil(total / limit) if total > 0 else 1
     }

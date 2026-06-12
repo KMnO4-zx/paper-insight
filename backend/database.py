@@ -22,6 +22,7 @@ T = TypeVar("T")
 _conference_cache = {}
 _cache_timestamp = {}
 _CACHE_TTL_SECONDS = 86400
+_READ_FILTER_SEARCH_LIMIT = 1_000_000
 
 
 class DatabaseError(Exception):
@@ -2397,6 +2398,82 @@ def _load_keywords_for_papers(papers: list[dict]) -> tuple[list[dict], bool]:
     return papers, True
 
 
+def _read_counts_payload(total: object, read_total: object) -> dict[str, int]:
+    total_count = _as_nonnegative_int(total)
+    read_count = min(_as_nonnegative_int(read_total), total_count)
+    return {
+        "all": total_count,
+        "unread": max(total_count - read_count, 0),
+        "read": read_count,
+    }
+
+
+def _paper_read_filter_clause(
+    user_id: str | None,
+    read_status: str,
+    paper_alias: str = "p",
+) -> tuple[str, list[object]]:
+    if read_status == "all":
+        return "", []
+    if not user_id:
+        raise ValueError("user_id is required for read status filtering")
+
+    if read_status == "read":
+        return (
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM paper_marks pm_read
+                WHERE pm_read.user_id = %s
+                  AND pm_read.paper_id = {paper_alias}.id
+                  AND pm_read.viewed = TRUE
+            )
+            """,
+            [user_id],
+        )
+    if read_status == "unread":
+        return (
+            f"""
+            NOT EXISTS (
+                SELECT 1
+                FROM paper_marks pm_unread
+                WHERE pm_unread.user_id = %s
+                  AND pm_unread.paper_id = {paper_alias}.id
+                  AND pm_unread.viewed = TRUE
+            )
+            """,
+            [user_id],
+        )
+
+    raise ValueError(f"unsupported read_status: {read_status}")
+
+
+def _count_read_states_from_scoped_sql(
+    cur: psycopg.Cursor,
+    scoped_sql: str,
+    scoped_params: list[object],
+    user_id: str,
+) -> dict[str, int]:
+    cur.execute(
+        f"""
+        WITH scoped_papers AS (
+            {scoped_sql}
+        )
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE pm.viewed = TRUE) AS read_total
+        FROM scoped_papers sp
+        LEFT JOIN paper_marks pm
+          ON pm.user_id = %s
+         AND pm.paper_id = sp.id
+         AND pm.viewed = TRUE
+        """,
+        [*scoped_params, user_id],
+    )
+    row = cur.fetchone() or {}
+    return _read_counts_payload(row.get("total"), row.get("read_total"))
+
+
 def _search_papers_via_rpc(
     venue_prefix: str | None,
     offset: int,
@@ -2628,6 +2705,123 @@ def _search_papers(
     return papers, total
 
 
+def _search_papers_with_read_filter(
+    venue_prefix: str | None,
+    offset: int,
+    limit: int,
+    search: str | None,
+    search_title: bool,
+    search_abstract: bool,
+    search_keywords: bool,
+    user_id: str,
+    read_status: str,
+) -> tuple[list[dict], int]:
+    if read_status == "all":
+        return _search_papers(
+            venue_prefix,
+            offset,
+            limit,
+            search,
+            search_title,
+            search_abstract,
+            search_keywords,
+        )
+    if search and not (search_title or search_abstract or search_keywords):
+        return [], 0
+
+    read_clause, read_params = _paper_read_filter_clause(user_id, read_status, "p")
+
+    def operation() -> tuple[list[dict], int]:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                scoped_params = [
+                    search,
+                    venue_prefix,
+                    search_title,
+                    search_abstract,
+                    search_keywords,
+                    _READ_FILTER_SEARCH_LIMIT,
+                    0,
+                ]
+                cur.execute(
+                    f"""
+                    WITH scoped_papers AS (
+                        SELECT ROW_NUMBER() OVER () AS scoped_order, *
+                        FROM search_papers_optimized(%s, %s, %s, %s, %s, %s, %s)
+                    )
+                    SELECT p.id,
+                           p.title,
+                           p.abstract,
+                           p.venue,
+                           p.primary_area,
+                           p.llm_response,
+                           p.created_at
+                    FROM scoped_papers p
+                    WHERE {read_clause}
+                    ORDER BY p.scoped_order
+                    LIMIT %s OFFSET %s
+                    """,
+                    [*scoped_params, *read_params, limit, offset],
+                )
+                papers = cur.fetchall()
+                papers, _ = _load_keywords_for_papers(papers)
+
+                cur.execute(
+                    f"""
+                    WITH scoped_papers AS (
+                        SELECT *
+                        FROM search_papers_optimized(%s, %s, %s, %s, %s, %s, %s)
+                    )
+                    SELECT COUNT(*) AS total
+                    FROM scoped_papers p
+                    WHERE {read_clause}
+                    """,
+                    [*scoped_params, *read_params],
+                )
+                total = int((cur.fetchone() or {}).get("total") or 0)
+
+        return papers, total
+
+    return _run_with_retry(operation, f"search_papers_with_read_filter:{user_id}:{read_status}")
+
+
+def count_search_paper_read_states(
+    venue_prefix: str | None,
+    search: str | None,
+    search_title: bool,
+    search_abstract: bool,
+    search_keywords: bool,
+    user_id: str,
+) -> dict[str, int]:
+    if not DATABASE_URL:
+        return _read_counts_payload(0, 0)
+    if search and not (search_title or search_abstract or search_keywords):
+        return _read_counts_payload(0, 0)
+
+    def operation() -> dict[str, int]:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                return _count_read_states_from_scoped_sql(
+                    cur,
+                    """
+                    SELECT id
+                    FROM search_papers_optimized(%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        search,
+                        venue_prefix,
+                        search_title,
+                        search_abstract,
+                        search_keywords,
+                        _READ_FILTER_SEARCH_LIMIT,
+                        0,
+                    ],
+                    user_id,
+                )
+
+    return _run_with_retry(operation, f"count_search_paper_read_states:{user_id}:{venue_prefix}:{search}")
+
+
 def get_conference_papers(
     venue: str,
     offset: int,
@@ -2636,7 +2830,22 @@ def get_conference_papers(
     search_title: bool = True,
     search_abstract: bool = True,
     search_keywords: bool = True,
+    user_id: str | None = None,
+    read_status: str = "all",
 ):
+    if read_status != "all":
+        return _search_papers_with_read_filter(
+            venue,
+            offset,
+            limit,
+            search,
+            search_title,
+            search_abstract,
+            search_keywords,
+            user_id or "",
+            read_status,
+        )
+
     return _search_papers(
         venue,
         offset,
@@ -2655,7 +2864,22 @@ def search_all_papers(
     search_title: bool = True,
     search_abstract: bool = True,
     search_keywords: bool = True,
+    user_id: str | None = None,
+    read_status: str = "all",
 ):
+    if read_status != "all":
+        return _search_papers_with_read_filter(
+            None,
+            offset,
+            limit,
+            search,
+            search_title,
+            search_abstract,
+            search_keywords,
+            user_id or "",
+            read_status,
+        )
+
     return _search_papers(
         None,
         offset,
@@ -2807,6 +3031,8 @@ def get_hf_daily_papers(
     search_title: bool = True,
     search_abstract: bool = True,
     search_keywords: bool = True,
+    user_id: str | None = None,
+    read_status: str = "all",
 ) -> tuple[list[dict], int]:
     if not DATABASE_URL:
         return [], 0
@@ -2815,6 +3041,123 @@ def get_hf_daily_papers(
         return [], 0
 
     def operation() -> tuple[list[dict], int]:
+        base_where_parts: list[str] = []
+        params: list[object] = []
+        if search:
+            search_parts = []
+            if search_title:
+                search_parts.append("p.title ILIKE %s")
+                params.append(f"%{search}%")
+            if search_abstract:
+                search_parts.append("p.abstract ILIKE %s")
+                params.append(f"%{search}%")
+            if search_keywords:
+                search_parts.append(
+                    """
+                    EXISTS (
+                        SELECT 1
+                        FROM keywords
+                        WHERE keywords.paper_id = p.id
+                          AND keywords.keyword ILIKE %s
+                    )
+                    """
+                )
+                params.append(f"%{search}%")
+            base_where_parts.append(f"({' OR '.join(search_parts)})")
+
+        read_clause, read_params = _paper_read_filter_clause(user_id, read_status, "p")
+        list_where_parts = [*base_where_parts]
+        if read_clause:
+            list_where_parts.append(read_clause)
+        list_where_clause = f"WHERE {' AND '.join(list_where_parts)}" if list_where_parts else ""
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM (
+                        SELECT DISTINCT h.paper_id
+                        FROM hf_daily_papers h
+                        JOIN papers p ON p.id = h.paper_id
+                        {list_where_clause}
+                    ) unique_hf_daily_papers
+                    """,
+                    [*params, *read_params],
+                )
+                total = int(cur.fetchone()["total"] or 0)
+
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM (
+                        SELECT DISTINCT ON (h.paper_id)
+                               p.*,
+                               h.daily_date AS hf_daily_date,
+                               h.rank AS hf_daily_rank,
+                               h.upvotes AS hf_daily_upvotes,
+                               h.thumbnail AS hf_daily_thumbnail,
+                               h.discussion_id AS hf_daily_discussion_id,
+                               h.project_page AS hf_daily_project_page,
+                               h.github_repo AS hf_daily_github_repo,
+                               h.github_stars AS hf_daily_github_stars,
+                               h.num_comments AS hf_daily_num_comments
+                        FROM hf_daily_papers h
+                        JOIN papers p ON p.id = h.paper_id
+                        {list_where_clause}
+                        ORDER BY
+                            h.paper_id ASC,
+                            h.daily_date DESC,
+                            h.upvotes DESC,
+                            h.rank ASC,
+                            h.id DESC
+                    ) latest_hf_daily_papers
+                    ORDER BY
+                        hf_daily_date DESC,
+                        hf_daily_upvotes DESC,
+                        hf_daily_rank ASC,
+                        title ASC,
+                        id ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    [*params, *read_params, limit, offset],
+                )
+                rows = cur.fetchall()
+
+        papers: list[dict] = []
+        for row in rows:
+            paper = dict(row)
+            paper["hf_daily"] = {
+                "daily_date": paper.pop("hf_daily_date", None),
+                "rank": paper.pop("hf_daily_rank", None),
+                "upvotes": paper.pop("hf_daily_upvotes", None),
+                "thumbnail": paper.pop("hf_daily_thumbnail", None),
+                "discussion_id": paper.pop("hf_daily_discussion_id", None),
+                "project_page": paper.pop("hf_daily_project_page", None),
+                "github_repo": paper.pop("hf_daily_github_repo", None),
+                "github_stars": paper.pop("hf_daily_github_stars", None),
+                "num_comments": paper.pop("hf_daily_num_comments", None),
+            }
+            papers.append(paper)
+
+        papers, _ = _load_keywords_for_papers(papers)
+        return papers, total
+
+    return _run_with_retry(operation, "get_hf_daily_papers")
+
+
+def count_hf_daily_paper_read_states(
+    search: str | None,
+    search_title: bool,
+    search_abstract: bool,
+    search_keywords: bool,
+    user_id: str,
+) -> dict[str, int]:
+    if not DATABASE_URL:
+        return _read_counts_payload(0, 0)
+    if search and not (search_title or search_abstract or search_keywords):
+        return _read_counts_payload(0, 0)
+
+    def operation() -> dict[str, int]:
         where_parts: list[str] = []
         params: list[object] = []
         if search:
@@ -2842,77 +3185,19 @@ def get_hf_daily_papers(
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with _get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
+                return _count_read_states_from_scoped_sql(
+                    cur,
                     f"""
-                    SELECT COUNT(*) AS total
-                    FROM (
-                        SELECT DISTINCT h.paper_id
-                        FROM hf_daily_papers h
-                        JOIN papers p ON p.id = h.paper_id
-                        {where_clause}
-                    ) unique_hf_daily_papers
+                    SELECT DISTINCT h.paper_id AS id
+                    FROM hf_daily_papers h
+                    JOIN papers p ON p.id = h.paper_id
+                    {where_clause}
                     """,
                     params,
+                    user_id,
                 )
-                total = int(cur.fetchone()["total"] or 0)
 
-                cur.execute(
-                    f"""
-                    SELECT *
-                    FROM (
-                        SELECT DISTINCT ON (h.paper_id)
-                               p.*,
-                               h.daily_date AS hf_daily_date,
-                               h.rank AS hf_daily_rank,
-                               h.upvotes AS hf_daily_upvotes,
-                               h.thumbnail AS hf_daily_thumbnail,
-                               h.discussion_id AS hf_daily_discussion_id,
-                               h.project_page AS hf_daily_project_page,
-                               h.github_repo AS hf_daily_github_repo,
-                               h.github_stars AS hf_daily_github_stars,
-                               h.num_comments AS hf_daily_num_comments
-                        FROM hf_daily_papers h
-                        JOIN papers p ON p.id = h.paper_id
-                        {where_clause}
-                        ORDER BY
-                            h.paper_id ASC,
-                            h.daily_date DESC,
-                            h.upvotes DESC,
-                            h.rank ASC,
-                            h.id DESC
-                    ) latest_hf_daily_papers
-                    ORDER BY
-                        hf_daily_date DESC,
-                        hf_daily_upvotes DESC,
-                        hf_daily_rank ASC,
-                        title ASC,
-                        id ASC
-                    LIMIT %s OFFSET %s
-                    """,
-                    [*params, limit, offset],
-                )
-                rows = cur.fetchall()
-
-        papers: list[dict] = []
-        for row in rows:
-            paper = dict(row)
-            paper["hf_daily"] = {
-                "daily_date": paper.pop("hf_daily_date", None),
-                "rank": paper.pop("hf_daily_rank", None),
-                "upvotes": paper.pop("hf_daily_upvotes", None),
-                "thumbnail": paper.pop("hf_daily_thumbnail", None),
-                "discussion_id": paper.pop("hf_daily_discussion_id", None),
-                "project_page": paper.pop("hf_daily_project_page", None),
-                "github_repo": paper.pop("hf_daily_github_repo", None),
-                "github_stars": paper.pop("hf_daily_github_stars", None),
-                "num_comments": paper.pop("hf_daily_num_comments", None),
-            }
-            papers.append(paper)
-
-        papers, _ = _load_keywords_for_papers(papers)
-        return papers, total
-
-    return _run_with_retry(operation, "get_hf_daily_papers")
+    return _run_with_retry(operation, f"count_hf_daily_paper_read_states:{user_id}:{search}")
 
 
 def get_arxiv_papers(
@@ -2923,6 +3208,8 @@ def get_arxiv_papers(
     search_title: bool = True,
     search_abstract: bool = True,
     search_keywords: bool = True,
+    user_id: str | None = None,
+    read_status: str = "all",
 ) -> tuple[list[dict], int]:
     if not DATABASE_URL:
         return [], 0
@@ -2956,6 +3243,9 @@ def get_arxiv_papers(
                 )
                 params.append(f"%{search}%")
             where_parts.append(f"({' OR '.join(search_parts)})")
+        read_clause, read_params = _paper_read_filter_clause(user_id, read_status, "p")
+        if read_clause:
+            where_parts.append(read_clause)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with _get_connection() as conn:
@@ -2967,7 +3257,7 @@ def get_arxiv_papers(
                     JOIN papers p ON p.id = a.paper_id
                     {where_clause}
                     """,
-                    params,
+                    [*params, *read_params],
                 )
                 total = int(cur.fetchone()["total"] or 0)
 
@@ -2988,7 +3278,7 @@ def get_arxiv_papers(
                     ORDER BY a.added_at DESC, a.id DESC
                     LIMIT %s OFFSET %s
                     """,
-                    [*params, limit, offset],
+                    [*params, *read_params, limit, offset],
                 )
                 rows = cur.fetchall()
 
@@ -2997,6 +3287,64 @@ def get_arxiv_papers(
         return papers, total
 
     return _run_with_retry(operation, f"get_arxiv_papers:{offset}:{limit}:{analyzed_only}:{search}")
+
+
+def count_arxiv_paper_read_states(
+    analyzed_only: bool,
+    search: str | None,
+    search_title: bool,
+    search_abstract: bool,
+    search_keywords: bool,
+    user_id: str,
+) -> dict[str, int]:
+    if not DATABASE_URL:
+        return _read_counts_payload(0, 0)
+    if search and not (search_title or search_abstract or search_keywords):
+        return _read_counts_payload(0, 0)
+
+    def operation() -> dict[str, int]:
+        where_parts: list[str] = []
+        params: list[object] = []
+        if analyzed_only:
+            where_parts.append("p.llm_response IS NOT NULL")
+        if search:
+            search_parts = []
+            if search_title:
+                search_parts.append("p.title ILIKE %s")
+                params.append(f"%{search}%")
+            if search_abstract:
+                search_parts.append("p.abstract ILIKE %s")
+                params.append(f"%{search}%")
+            if search_keywords:
+                search_parts.append(
+                    """
+                    EXISTS (
+                        SELECT 1
+                        FROM keywords
+                        WHERE keywords.paper_id = p.id
+                          AND keywords.keyword ILIKE %s
+                    )
+                    """
+                )
+                params.append(f"%{search}%")
+            where_parts.append(f"({' OR '.join(search_parts)})")
+
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                return _count_read_states_from_scoped_sql(
+                    cur,
+                    f"""
+                    SELECT p.id
+                    FROM arxiv_papers a
+                    JOIN papers p ON p.id = a.paper_id
+                    {where_clause}
+                    """,
+                    params,
+                    user_id,
+                )
+
+    return _run_with_retry(operation, f"count_arxiv_paper_read_states:{user_id}:{search}")
 
 
 def get_unanalyzed_papers(limit: int = 10) -> list:

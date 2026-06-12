@@ -156,3 +156,36 @@ def test_get_hf_daily_papers_deduplicates_papers_by_latest_daily_record(monkeypa
     assert "DISTINCT ON (h.paper_id)" in list_sql
     assert "h.daily_date DESC" in list_sql
     assert "h.upvotes DESC" in list_sql
+
+
+def test_get_hf_daily_papers_applies_read_filter(monkeypatch):
+    cursor = FakeCursor()
+
+    @contextmanager
+    def fake_get_connection():
+        yield FakeConnection(cursor)
+
+    monkeypatch.setattr(database, "DATABASE_URL", "postgresql://test/paper_online")
+    monkeypatch.setattr(database, "_get_connection", fake_get_connection)
+    monkeypatch.setattr(database, "_load_keywords_for_papers", lambda papers: (papers, {}))
+
+    papers, total = database.get_hf_daily_papers(
+        offset=0,
+        limit=8,
+        user_id="user-1",
+        read_status="read",
+    )
+
+    assert total == 1
+    assert [paper["id"] for paper in papers] == ["hf:2604.00001"]
+    count_sql = cursor.calls[0][0]
+    count_params = cursor.calls[0][1]
+    list_sql = cursor.calls[1][0]
+    list_params = cursor.calls[1][1]
+
+    assert "EXISTS" in count_sql
+    assert "paper_marks pm_read" in count_sql
+    assert "pm_read.viewed = TRUE" in count_sql
+    assert "EXISTS" in list_sql
+    assert count_params == ["user-1"]
+    assert list_params == ["user-1", 8, 0]

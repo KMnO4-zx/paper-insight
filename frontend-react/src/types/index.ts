@@ -72,11 +72,20 @@ export interface SearchFilters {
   keywords: boolean;
 }
 
+export type PaperReadFilter = 'all' | 'unread' | 'read';
+
+export interface PaperReadCounts {
+  all: number;
+  unread: number;
+  read: number;
+}
+
 export interface PaperListResponse {
   papers: Paper[];
   total: number;
   page: number;
   pages: number;
+  read_counts?: PaperReadCounts | null;
 }
 
 export interface ChatSessionSummary {

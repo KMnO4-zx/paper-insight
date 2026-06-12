@@ -170,3 +170,36 @@ def test_get_arxiv_papers_applies_search_filters(monkeypatch):
     assert count_params == ["%agent%", "%agent%"]
     assert list_params == ["%agent%", "%agent%", 6, 0]
     assert "ORDER BY a.added_at DESC" in list_sql
+
+
+def test_get_arxiv_papers_applies_unread_filter(monkeypatch):
+    cursor = FakeCursor()
+
+    @contextmanager
+    def fake_get_connection():
+        yield FakeConnection(cursor)
+
+    monkeypatch.setattr(database, "DATABASE_URL", "postgresql://test/paper_online")
+    monkeypatch.setattr(database, "_get_connection", fake_get_connection)
+    monkeypatch.setattr(database, "_load_keywords_for_papers", lambda papers: (papers, {}))
+
+    papers, total = database.get_arxiv_papers(
+        offset=0,
+        limit=6,
+        user_id="user-1",
+        read_status="unread",
+    )
+
+    assert total == 1
+    assert papers[0]["id"] == "arxiv:2605.29707"
+    count_sql = cursor.calls[0][0]
+    count_params = cursor.calls[0][1]
+    list_sql = cursor.calls[1][0]
+    list_params = cursor.calls[1][1]
+
+    assert "NOT EXISTS" in count_sql
+    assert "paper_marks pm_unread" in count_sql
+    assert "pm_unread.viewed = TRUE" in count_sql
+    assert "NOT EXISTS" in list_sql
+    assert count_params == ["user-1"]
+    assert list_params == ["user-1", 6, 0]
