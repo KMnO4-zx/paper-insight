@@ -557,6 +557,18 @@
     margin-top: 0.35rem;
   }
 
+  .changelog-markdown ul {
+    list-style-type: disc;
+  }
+
+  .changelog-markdown ol {
+    list-style-type: decimal;
+  }
+
+  .changelog-markdown li::marker {
+    color: #ff9900;
+  }
+
   .markdown-body code {
     border-radius: 0.5rem;
     background: #f1f5f9;

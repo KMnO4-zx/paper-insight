@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from sse_starlette.sse import EventSourceResponse
 
 from pydantic import BaseModel
@@ -2148,6 +2148,7 @@ async def search_all_papers_endpoint(
 # 静态文件服务
 REACT_FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend-react" / "dist"
 IMAGES_DIR = Path(__file__).parent.parent / "images"
+CHANGELOG_PATH = Path(__file__).parent.parent / "changelog.md"
 
 
 def get_frontend_index() -> Path:
@@ -2202,6 +2203,18 @@ async def serve_hf_daily_frontend():
 @app.get("/arxiv")
 async def serve_arxiv_frontend():
     return FileResponse(get_frontend_index())
+
+
+@app.get("/changelog")
+async def serve_changelog_frontend():
+    return FileResponse(get_frontend_index())
+
+
+@app.get("/changelog.md")
+async def get_changelog_markdown():
+    if not CHANGELOG_PATH.exists():
+        return PlainTextResponse("# 更新日志\n\n暂无更新日志内容。\n", media_type="text/markdown; charset=utf-8")
+    return FileResponse(CHANGELOG_PATH, media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/conference/{venue}")

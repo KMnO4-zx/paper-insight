@@ -197,6 +197,14 @@ export async function fetchOnlineCount(): Promise<number> {
   return payload.count;
 }
 
+export async function fetchChangelogMarkdown(): Promise<string> {
+  const response = await apiRequest('/changelog.md');
+  if (!response.ok) {
+    throw new Error(response.statusText || '更新日志加载失败');
+  }
+  return response.text();
+}
+
 export async function fetchActiveLlmModel(): Promise<ActiveLlmModel> {
   return apiFetch<ActiveLlmModel>('/llm/active');
 }

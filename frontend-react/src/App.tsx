@@ -3,6 +3,7 @@ import { HomePage } from '@/pages/home-page';
 import { ConferencePage } from '@/pages/conference-page';
 import { HfDailyPage } from '@/pages/hf-daily-page';
 import { ArxivPage } from '@/pages/arxiv-page';
+import { ChangelogPage } from '@/pages/changelog-page';
 import { PaperPage } from '@/pages/paper-page';
 import { SearchPage } from '@/pages/search-page';
 import { AdminPage } from '@/pages/admin-page';
@@ -22,6 +23,8 @@ function App() {
     content = <HfDailyPage />;
   } else if (pathname === '/arxiv') {
     content = <ArxivPage />;
+  } else if (pathname === '/changelog') {
+    content = <ChangelogPage />;
   } else if (pathname === '/login') {
     content = <AuthPage mode="login" />;
   } else if (pathname === '/register') {
