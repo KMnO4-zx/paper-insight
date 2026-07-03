@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildConferenceKeywordSearchPath, getConferenceSlugFromVenue } from './constants';
+import { buildConferenceKeywordSearchPath, buildPaperKeywordSearchPath, getConferenceSlugFromVenue } from './constants';
 
 describe('getConferenceSlugFromVenue', () => {
   it('maps paper venue labels back to conference collection slugs', () => {
@@ -29,5 +29,19 @@ describe('getConferenceSlugFromVenue', () => {
   it('does not build keyword search URLs without a known collection or keyword', () => {
     expect(buildConferenceKeywordSearchPath('Hugging Face Daily', 'Video Generation')).toBeNull();
     expect(buildConferenceKeywordSearchPath('ICLR 2026 Oral', '   ')).toBeNull();
+  });
+
+  it('builds keyword-only search URLs for paper source collections', () => {
+    expect(buildPaperKeywordSearchPath('ICLR 2026 Oral', 'Video Generation')).toBe(
+      '/conference/iclr_2026?q=Video+Generation&title=false&abstract=false&keywords=true',
+    );
+    expect(buildPaperKeywordSearchPath('Hugging Face Daily', 'Video Generation')).toBe(
+      '/hf-daily?q=Video+Generation&title=false&abstract=false&keywords=true',
+    );
+  });
+
+  it('does not build paper keyword search URLs for unsupported sources or empty keywords', () => {
+    expect(buildPaperKeywordSearchPath('arXiv cs.AI', 'Video Generation')).toBeNull();
+    expect(buildPaperKeywordSearchPath('Hugging Face Daily', '   ')).toBeNull();
   });
 });

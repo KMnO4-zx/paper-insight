@@ -135,6 +135,39 @@ def test_get_cached_paper_content_ignores_existing_blocked_cache(tmp_path, monke
     assert utils.get_cached_paper_content(paper_id, pdf_url) is None
 
 
+def test_reader_posts_json_payload(monkeypatch):
+    class FakeResponse:
+        text = "Title: Example Domain\n\nMarkdown Content:\nExample body"
+
+        def raise_for_status(self):
+            return None
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse()
+
+    monkeypatch.setattr(utils.requests, "post", fake_post)
+
+    assert utils.reader("https://www.example.com") == FakeResponse.text
+    assert calls == [
+        {
+            "url": "https://r.jina.ai/",
+            "json": {"url": "https://www.example.com"},
+            "headers": utils._reader_request_headers(),
+            "timeout": utils.TIMEOUT,
+        }
+    ]
+
+
 def test_reader_rejects_blocked_page(monkeypatch):
     class FakeResponse:
         text = "Title: Just a moment...\n## Performing security verification"
@@ -142,10 +175,10 @@ def test_reader_rejects_blocked_page(monkeypatch):
         def raise_for_status(self):
             return None
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         return FakeResponse()
 
-    monkeypatch.setattr(utils.requests, "get", fake_get)
+    monkeypatch.setattr(utils.requests, "post", fake_post)
 
     try:
         utils.reader("https://dl.acm.org/doi/pdf/10.1145/3772318.3791732")

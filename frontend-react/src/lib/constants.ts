@@ -87,3 +87,28 @@ export function buildConferenceKeywordSearchPath(venue: string | null | undefine
 
   return `/conference/${conferenceSlug}?${params.toString()}`;
 }
+
+export function buildPaperKeywordSearchPath(venue: string | null | undefined, keyword: string): string | null {
+  const query = keyword.trim();
+  if (!query) {
+    return null;
+  }
+
+  const conferenceSearchPath = buildConferenceKeywordSearchPath(venue, query);
+  if (conferenceSearchPath) {
+    return conferenceSearchPath;
+  }
+
+  if (venue?.toLowerCase().includes('hugging face')) {
+    const params = new URLSearchParams({
+      q: query,
+      title: 'false',
+      abstract: 'false',
+      keywords: 'true',
+    });
+
+    return `/hf-daily?${params.toString()}`;
+  }
+
+  return null;
+}

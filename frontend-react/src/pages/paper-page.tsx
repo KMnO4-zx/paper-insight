@@ -16,7 +16,7 @@ import { ReasoningStreamPanel } from '@/components/reasoning-stream-panel';
 import { RichContent } from '@/components/rich-content';
 import { fetchOpenInAiPrompt, fetchPaperInfo, fetchPaperMarks, paperApiPath, streamSse, updatePaperMark } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { buildConferenceKeywordSearchPath, getConferenceSlugFromVenue } from '@/lib/constants';
+import { buildPaperKeywordSearchPath } from '@/lib/constants';
 import { getVenueParts, normalizeKeywords } from '@/lib/content';
 import { useZoteroPaperMetadata } from '@/hooks/use-zotero-paper-metadata';
 import { navigate } from '@/lib/router';
@@ -249,7 +249,6 @@ export function PaperPage({ paperId }: PaperPageProps) {
   }, [paperId]);
 
   const venue = getVenueParts(paper?.venue);
-  const conferenceSlug = getConferenceSlugFromVenue(paper?.venue);
   const keywords = normalizeKeywords(paper?.keywords);
   const pdfUrl = paper?.pdf || `https://openreview.net/pdf?id=${paperId}`;
   const aiTutorTargets = openInAiPrompt ? [
@@ -279,11 +278,7 @@ export function PaperPage({ paperId }: PaperPageProps) {
     return true;
   };
   const openKeywordSearch = (keyword: string) => {
-    if (!conferenceSlug) {
-      return;
-    }
-
-    const keywordSearchPath = buildConferenceKeywordSearchPath(paper?.venue, keyword);
+    const keywordSearchPath = buildPaperKeywordSearchPath(paper?.venue, keyword);
     if (keywordSearchPath) {
       navigate(keywordSearchPath);
     }
@@ -354,8 +349,9 @@ export function PaperPage({ paperId }: PaperPageProps) {
                         index % 2 === 0
                           ? 'border-orange-100 bg-orange-50 px-3 py-1 text-sm text-orange-700'
                           : 'border-violet-100 bg-violet-50 px-3 py-1 text-sm text-violet-700';
+                      const keywordSearchPath = buildPaperKeywordSearchPath(paper.venue, keyword);
 
-                      if (!conferenceSlug) {
+                      if (!keywordSearchPath) {
                         return (
                           <Badge key={`${paper.id}-${keyword}`} variant="outline" className={className}>
                             {keyword}

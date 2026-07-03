@@ -232,12 +232,17 @@ def truncate_content_for_llm(text: str, max_tokens: int = LLM_CONTENT_TOKEN_LIMI
 
 
 def reader(url: str) -> str:
-    target_url = "https://r.jina.ai/" + url
+    target_url = "https://r.jina.ai/"
     last_error: str | None = None
 
     for attempt in range(MAX_RETRIES):
         try:
-            response = requests.get(target_url, headers=_reader_request_headers(url), timeout=TIMEOUT)
+            response = requests.post(
+                target_url,
+                json={"url": url},
+                headers=_reader_request_headers(),
+                timeout=TIMEOUT,
+            )
             response.raise_for_status()
             content = response.text
             if is_blocked_reader_content(content):
@@ -262,16 +267,13 @@ def is_blocked_reader_content(content: str) -> bool:
     return any(marker in normalized for marker in BLOCKED_READER_MARKERS)
 
 
-def _reader_request_headers(url: str) -> dict[str, str]:
-    headers = {
+def _reader_request_headers() -> dict[str, str]:
+    return {
         "Accept": "text/markdown,text/plain,text/*;q=0.9,*/*;q=0.8",
         "Accept-Language": PDF_HEADERS["Accept-Language"],
+        "Content-Type": "application/json",
         "User-Agent": HEADERS["User-Agent"],
     }
-    parsed = urlparse(url)
-    if parsed.netloc:
-        headers["X-Target-URL"] = url
-    return headers
 
 
 def _pdf_request_headers(url: str) -> dict[str, str]:
