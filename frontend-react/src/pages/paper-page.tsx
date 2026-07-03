@@ -528,7 +528,7 @@ export function PaperPage({ paperId }: PaperPageProps) {
           </section>
         </div>
 
-        <div className="min-h-0 xl:sticky xl:top-6 xl:self-start xl:h-[calc(100vh-8rem)] xl:overflow-hidden">
+        <div className="min-h-0 xl:sticky xl:top-6 xl:self-start">
           <ChatPanel paperId={paperId} />
         </div>
       </div>

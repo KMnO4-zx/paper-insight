@@ -53,6 +53,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
   const [desktopHistoryMode, setDesktopHistoryMode] = useState<'compact' | 'hidden'>('hidden');
   const [lastUserMessage, setLastUserMessage] = useState<string | null>(null);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+  const hasRegenerateTarget = Boolean(currentSessionId && lastUserMessage);
 
   useEffect(() => {
     const viewport = messagesViewportRef.current;
@@ -303,7 +304,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
 
   if (isAuthLoading) {
     return (
-      <section className="flex h-full min-h-[32rem] flex-col rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-black/5">
+      <section className="flex min-h-[min(22rem,calc(100dvh-12rem))] flex-col rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-black/5">
         <div className="flex items-center gap-2 text-sm text-[#728095]">
           <Loader2 className="h-4 w-4 animate-spin" />
           加载账号状态...
@@ -314,7 +315,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
 
   if (!user) {
     return (
-      <section className="flex h-full min-h-[32rem] flex-col rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-black/5">
+      <section className="flex min-h-[min(22rem,calc(100dvh-12rem))] flex-col rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-black/5">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-[#ff9900]" />
           <div className="text-sm font-semibold text-[#1e293b]">论文对话</div>
@@ -333,9 +334,9 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
   }
 
   return (
-    <section className="flex h-full min-h-[32rem] max-h-[calc(100vh-10rem)] flex-col overflow-hidden rounded-[28px] bg-white shadow-sm ring-1 ring-black/5 lg:min-h-[36rem] xl:max-h-none">
-      <div className="border-b border-[#eef2f7] px-4 py-4">
-        <div className="flex min-h-12 items-center justify-between gap-3">
+    <section className="flex h-[calc(100dvh-12rem)] min-h-[min(22rem,calc(100dvh-12rem))] flex-col overflow-hidden rounded-[28px] bg-white shadow-sm ring-1 ring-black/5">
+      <div className="border-b border-[#eef2f7] px-4 py-4 [@media(max-height:720px)]:py-3">
+        <div className="flex min-h-12 items-center justify-between gap-3 [@media(max-height:720px)]:min-h-10">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-[#fff7ed] text-[#ff9900] ring-1 ring-[#fed7aa]">
               <MessageSquare className="h-4 w-4" />
@@ -384,7 +385,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
             </div>
           </div>
         </div>
-        <div className="mt-1 flex justify-end">
+        <div className="mt-1 flex justify-end [@media(max-height:720px)]:hidden">
           <div className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-[#8a98ac]">
             <Keyboard className="h-3.5 w-3.5" />
             <span>Shift + Enter 发送消息</span>
@@ -400,14 +401,14 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
         }`}
       >
         <div className="flex min-h-0 flex-col">
-          <div ref={messagesViewportRef} className="flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+          <div ref={messagesViewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 [@media(max-height:720px)]:py-3">
             {isLoadingMessages ? (
               <div className="flex items-center gap-2 text-sm text-[#728095]">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 加载聊天记录...
               </div>
             ) : messages.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[#d8e0ea] bg-[#f8fafc] p-6 text-sm leading-6 text-[#728095]">
+              <div className="rounded-2xl border border-dashed border-[#d8e0ea] bg-[#f8fafc] p-6 text-sm leading-6 text-[#728095] [@media(max-height:720px)]:p-4">
                 输入问题，开始与论文对话。你可以让它解释方法、实验设置、结论，或者直接总结论文的贡献。
               </div>
             ) : (
@@ -453,19 +454,21 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
             )}
           </div>
 
-          <div className="border-t border-[#eef2f7] p-4">
-            <div className="flex flex-wrap items-center gap-2 pb-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-full"
-                onClick={regenerate}
-                disabled={!currentSessionId || !lastUserMessage || isSending}
-              >
-                <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
-                重新回复
-              </Button>
-            </div>
+          <div className="shrink-0 border-t border-[#eef2f7] p-4 [@media(max-height:720px)]:p-3">
+            {hasRegenerateTarget ? (
+              <div className="flex flex-wrap items-center gap-2 pb-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-full"
+                  onClick={regenerate}
+                  disabled={isSending}
+                >
+                  <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+                  重新回复
+                </Button>
+              </div>
+            ) : null}
 
             <div className="flex gap-3">
               <textarea
@@ -479,7 +482,7 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
                 }}
                 rows={3}
                 placeholder="输入你的问题..."
-                className="min-h-[88px] flex-1 resize-none rounded-2xl border border-[#d6deea] bg-[#f8fafc] px-4 py-3 text-sm leading-6 text-[#1e293b] outline-none transition focus:border-[#ff9900] focus:bg-white"
+                className="min-h-[88px] flex-1 resize-none rounded-2xl border border-[#d6deea] bg-[#f8fafc] px-4 py-3 text-sm leading-6 text-[#1e293b] outline-none transition focus:border-[#ff9900] focus:bg-white [@media(max-height:720px)]:min-h-[72px]"
               />
               <Button
                 onClick={() => void submitMessage()}
