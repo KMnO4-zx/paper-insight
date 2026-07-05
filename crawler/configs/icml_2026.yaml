@@ -1,0 +1,18 @@
+conference:
+  name: "ICML 2026"
+  domain: "ICML.cc/2026/Conference"
+  invitation: "ICML.cc/2026/Conference/-/Submission"
+  output_dir: "icml_2026"
+
+venues:
+  - type: "spotlight"
+    venue: "ICML 2026 spotlight"
+  - type: "regular"
+    venue: "ICML 2026 regular"
+
+settings:
+  api_base_url: "https://api2.openreview.net/notes"
+  limit: 25
+  initial_delay: 3.0
+  max_delay: 5.0
+  pause_between_venues: 30.0

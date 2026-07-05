@@ -13,6 +13,7 @@
 
 - `scripts/apply_migrations.py`：按顺序执行 `db/migrations/*.sql`
 - `scripts/import_papers.py`：将 `crawled_data/{conference}` 下的 JSONL 导入 PostgreSQL
+- `scripts/download_icml_2026_openreview.py`：登录 OpenReview 后低速下载 ICML 2026 metadata JSONL，不导入数据库
 - `scripts/build_chi_2026_jsonl.py`：从 DBLP + OpenAlex 生成 CHI 2026 的导入 JSONL
 - `scripts/build_cvpr_2026_jsonl.py`：从 CVF Open Access 生成 CVPR 2026 的导入 JSONL
 - `scripts/export_supabase.sh`：使用 `pg_dump` 导出 Supabase schema 和 data
@@ -47,11 +48,16 @@ uv run python scripts/apply_migrations.py --seed dev
 uv run python scripts/import_papers.py --conference neurips_2025
 uv run python scripts/import_papers.py --conference iclr_2026
 uv run python scripts/import_papers.py --conference icml_2025
+uv run python scripts/save_openreview_credentials.py
+uv run python scripts/download_icml_2026_openreview.py
 uv run python scripts/build_chi_2026_jsonl.py
 uv run python scripts/import_papers.py --conference chi_2026
 uv run python scripts/build_cvpr_2026_jsonl.py
 uv run python scripts/import_papers.py --conference cvpr_2026
 ```
+
+ICML 2026 的下载脚本只抓取 OpenReview note metadata，默认单线程、每页 25 条、每次请求 sleep 3 到 5 秒，并支持断点续跑。下载完成后先检查
+`crawled_data/icml_2026/download_report.json`，确认 `spotlight_papers.jsonl` 和 `regular_papers.jsonl` 都没有字段缺失，再考虑执行数据库导入。
 
 CHI 2026 的生成脚本默认只保留 OpenAlex 提供的非 ACM PDF 论文，避免把服务器无法读取的 ACM DL PDF 链接导入线上库。维护者如需全量元数据，可显式加 `--include-acm-only`。
 
