@@ -786,6 +786,165 @@ def count_unchecked_code_availability() -> int:
     return _run_with_retry(operation, "count_unchecked_code_availability")
 
 
+def update_paper_generated_keywords(
+    paper_id: str,
+    keywords: list[str],
+    source: str = "generated",
+    meta: dict | None = None,
+) -> None:
+    if not DATABASE_URL:
+        return
+
+    normalized_keywords: list[str] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        text = re.sub(r"\s+", " ", str(keyword or "")).strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_keywords.append(text)
+
+    def operation() -> None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE papers
+                    SET keywords = %s,
+                        keywords_source = %s,
+                        keywords_meta = %s,
+                        keywords_checked_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (
+                        Jsonb(normalized_keywords),
+                        source,
+                        Jsonb(meta or {}),
+                        paper_id,
+                    ),
+                )
+
+                cur.execute("DELETE FROM keywords WHERE paper_id = %s", (paper_id,))
+                if normalized_keywords:
+                    cur.executemany(
+                        """
+                        INSERT INTO keywords (paper_id, keyword)
+                        VALUES (%s, %s)
+                        """,
+                        [(paper_id, keyword) for keyword in normalized_keywords],
+                    )
+            conn.commit()
+
+        _conference_cache.clear()
+        _cache_timestamp.clear()
+
+    _run_with_retry(operation, f"update_paper_generated_keywords:{paper_id}")
+
+
+def get_papers_pending_keyword_enrichment(limit: int = 10) -> list:
+    if not DATABASE_URL:
+        return []
+
+    def operation() -> list:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, title, abstract, venue, primary_area
+                    FROM papers p
+                    WHERE p.keywords_checked_at IS NULL
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM keywords k
+                        WHERE k.paper_id = p.id
+                      )
+                    ORDER BY p.created_at NULLS FIRST, p.id
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                return cur.fetchall()
+
+    return _run_with_retry(operation, f"get_papers_pending_keyword_enrichment:{limit}")
+
+
+def count_pending_keyword_enrichment() -> int:
+    if not DATABASE_URL:
+        return 0
+
+    def operation() -> int:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM papers p
+                    WHERE p.keywords_checked_at IS NULL
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM keywords k
+                        WHERE k.paper_id = p.id
+                      )
+                    """
+                )
+                row = cur.fetchone()
+                return int(row["total"] or 0)
+
+    return _run_with_retry(operation, "count_pending_keyword_enrichment")
+
+
+def count_missing_keywords() -> int:
+    if not DATABASE_URL:
+        return 0
+
+    def operation() -> int:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM papers p
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM keywords k
+                        WHERE k.paper_id = p.id
+                    )
+                    """
+                )
+                row = cur.fetchone()
+                return int(row["total"] or 0)
+
+    return _run_with_retry(operation, "count_missing_keywords")
+
+
+def count_unchecked_keyword_enrichment() -> int:
+    if not DATABASE_URL:
+        return 0
+
+    def operation() -> int:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM papers p
+                    WHERE p.keywords_checked_at IS NULL
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM keywords k
+                        WHERE k.paper_id = p.id
+                      )
+                    """
+                )
+                row = cur.fetchone()
+                return int(row["total"] or 0)
+
+    return _run_with_retry(operation, "count_unchecked_keyword_enrichment")
+
+
 def create_user(
     email: str,
     email_normalized: str,

@@ -130,16 +130,19 @@ def _insert_batch(
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.executemany(
-                """
-                INSERT INTO papers (id, title, abstract, keywords, pdf, venue, primary_area, sort_order)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    abstract = EXCLUDED.abstract,
-                    keywords = EXCLUDED.keywords,
-                    pdf = EXCLUDED.pdf,
-                    venue = EXCLUDED.venue,
-                    primary_area = EXCLUDED.primary_area,
+                    """
+                    INSERT INTO papers (id, title, abstract, keywords, pdf, venue, primary_area, sort_order)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        abstract = EXCLUDED.abstract,
+                        keywords = CASE
+                            WHEN jsonb_array_length(EXCLUDED.keywords) > 0 THEN EXCLUDED.keywords
+                            ELSE papers.keywords
+                        END,
+                        pdf = EXCLUDED.pdf,
+                        venue = EXCLUDED.venue,
+                        primary_area = EXCLUDED.primary_area,
                     sort_order = EXCLUDED.sort_order
                 """,
                 papers,
@@ -155,7 +158,9 @@ def _insert_batch(
                     authors,
                 )
 
-            cur.execute("DELETE FROM keywords WHERE paper_id = ANY(%s)", (paper_ids,))
+            keyword_paper_ids = sorted({paper_id for paper_id, _keyword in keywords})
+            if keyword_paper_ids:
+                cur.execute("DELETE FROM keywords WHERE paper_id = ANY(%s)", (keyword_paper_ids,))
             if keywords:
                 cur.executemany(
                     """

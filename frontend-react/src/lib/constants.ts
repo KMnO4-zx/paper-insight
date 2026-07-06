@@ -2,6 +2,13 @@ import type { ConferenceDefinition, ConferenceSlug } from '@/types';
 
 export const CONFERENCES: ConferenceDefinition[] = [
   {
+    id: 'acl_2026',
+    name: 'ACL 2026',
+    fullName: 'Annual Meeting of the Association for Computational Linguistics',
+    year: 2026,
+    accentClass: 'from-[#14b8a6] via-[#38bdf8] to-[#6366f1]',
+  },
+  {
     id: 'iclr_2026',
     name: 'ICLR 2026',
     fullName: 'International Conference on Learning Representations',

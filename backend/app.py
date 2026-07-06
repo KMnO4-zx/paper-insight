@@ -56,10 +56,13 @@ from database import (
     count_arxiv_paper_read_states,
     count_active_admins,
     count_hf_daily_paper_read_states,
+    count_missing_keywords,
     count_pending_code_availability,
+    count_pending_keyword_enrichment,
     count_papers,
     count_search_paper_read_states,
     count_unchecked_code_availability,
+    count_unchecked_keyword_enrichment,
     count_unanalyzed_papers,
     create_chat_session,
     create_or_link_github_user,
@@ -291,6 +294,9 @@ async def build_background_tasks_payload() -> dict:
         unanalyzed_count = await asyncio.to_thread(count_unanalyzed_papers)
         pending_code_count = await asyncio.to_thread(count_pending_code_availability)
         unchecked_code_count = await asyncio.to_thread(count_unchecked_code_availability)
+        pending_keyword_count = await asyncio.to_thread(count_pending_keyword_enrichment)
+        missing_keyword_count = await asyncio.to_thread(count_missing_keywords)
+        unchecked_keyword_count = await asyncio.to_thread(count_unchecked_keyword_enrichment)
     except DatabaseError:
         raise
 
@@ -336,6 +342,29 @@ async def build_background_tasks_payload() -> dict:
                     "last_run_started_at": analyzer_state.get("last_run_started_at"),
                     "last_run_finished_at": analyzer_state.get("last_run_finished_at"),
                     "depends_on_task_id": "paper_analysis",
+                },
+            },
+            {
+                "id": "keyword_enrichment",
+                "name": "关键词补全",
+                "owner": "admin",
+                "status": analysis_status,
+                "enabled": background_analysis_enabled,
+                "manageable": False,
+                "description": "基于标题和摘要为缺失关键词的论文生成检索标签",
+                "metadata": {
+                    "total_paper_count": total_paper_count,
+                    "pending_keyword_enrichment_count": pending_keyword_count,
+                    "missing_keyword_count": missing_keyword_count,
+                    "unchecked_keyword_enrichment_count": unchecked_keyword_count,
+                    "check_interval_seconds": background_analyzer.check_interval,
+                    "last_run_success_count": analyzer_state.get("last_run_keyword_success_count", 0),
+                    "last_run_failed_count": analyzer_state.get("last_run_keyword_failed_count", 0),
+                    "current_paper_id": analyzer_state.get("current_keyword_paper_id"),
+                    "last_enriched_paper_id": analyzer_state.get("last_keyword_enriched_paper_id"),
+                    "last_run_started_at": analyzer_state.get("last_run_started_at"),
+                    "last_run_finished_at": analyzer_state.get("last_run_finished_at"),
+                    "shares_scheduler_task_id": "paper_analysis",
                 },
             },
             {
@@ -2021,6 +2050,7 @@ async def get_conference_papers_endpoint(
     venue_map = {
         "neurips_2025": "NeurIPS 2025",
         "iclr_2026": "ICLR 2026",
+        "acl_2026": "ACL 2026",
         "icml_2025": "ICML 2025",
         "chi_2026": "CHI 2026",
         "cvpr_2026": "CVPR 2026",

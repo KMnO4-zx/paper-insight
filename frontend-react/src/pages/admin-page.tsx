@@ -459,6 +459,7 @@ export function AdminPage() {
   );
   const paperLibraryTotal = metadataNumber(paperAnalysisTask, 'total_paper_count')
     ?? metadataNumber(adminTasks.find((task) => task.id === 'code_availability'), 'total_paper_count')
+    ?? metadataNumber(adminTasks.find((task) => task.id === 'keyword_enrichment'), 'total_paper_count')
     ?? 0;
   const activeAdminTask = adminTasks[activeAdminTaskIndex] ?? adminTasks[0] ?? null;
   const trendData = metrics?.trend ?? [];
@@ -807,17 +808,36 @@ export function AdminPage() {
                   const isHiddenTask = relativeIndex > 2;
                   const isPaperAnalysisTask = task.id === 'paper_analysis';
                   const isCodeAvailabilityTask = task.id === 'code_availability';
+                  const isKeywordEnrichmentTask = task.id === 'keyword_enrichment';
                   const totalCount = metadataNumber(task, 'total_paper_count') ?? paperLibraryTotal;
                   const uncheckedCodeCount = metadataNumber(task, 'unchecked_code_availability_count');
+                  const missingKeywordCount = metadataNumber(task, 'missing_keyword_count');
+                  const uncheckedKeywordCount = metadataNumber(task, 'unchecked_keyword_enrichment_count');
                   const pendingCount = isCodeAvailabilityTask
                     ? metadataNumber(task, 'pending_code_availability_count') ?? uncheckedCodeCount
-                    : metadataNumber(task, 'unanalyzed_count');
-                  const pendingLabel = isCodeAvailabilityTask ? '待判断代码' : '待分析论文';
-                  const currentLabel = isCodeAvailabilityTask ? '当前判断' : '当前处理';
-                  const latestLabel = isCodeAvailabilityTask ? '最近判断' : '最近分析';
+                    : isKeywordEnrichmentTask
+                      ? metadataNumber(task, 'pending_keyword_enrichment_count') ?? missingKeywordCount
+                      : metadataNumber(task, 'unanalyzed_count');
+                  const pendingLabel = isCodeAvailabilityTask
+                    ? '待判断代码'
+                    : isKeywordEnrichmentTask
+                      ? '待补关键词'
+                      : '待分析论文';
+                  const currentLabel = isCodeAvailabilityTask
+                    ? '当前判断'
+                    : isKeywordEnrichmentTask
+                      ? '当前补全'
+                      : '当前处理';
+                  const latestLabel = isCodeAvailabilityTask
+                    ? '最近判断'
+                    : isKeywordEnrichmentTask
+                      ? '最近补全'
+                      : '最近分析';
                   const latestPaperId = isCodeAvailabilityTask
                     ? metadataString(task, 'last_checked_paper_id')
-                    : metadataString(task, 'last_analyzed_paper_id');
+                    : isKeywordEnrichmentTask
+                      ? metadataString(task, 'last_enriched_paper_id')
+                      : metadataString(task, 'last_analyzed_paper_id');
                   const lastRunStartedAt = metadataString(task, 'last_run_started_at');
                   const lastRunFinishedAt = metadataString(task, 'last_run_finished_at');
                   const transformByDepth = [
@@ -939,6 +959,16 @@ export function AdminPage() {
                           {isCodeAvailabilityTask && typeof uncheckedCodeCount === 'number' ? (
                             <span className="ml-3 inline-flex rounded-full bg-white px-2 py-0.5 text-xs font-medium text-[#64748b] ring-1 ring-[#e5eaf2]">
                               未检查总数 {formatTokenCount(uncheckedCodeCount)}
+                            </span>
+                          ) : null}
+                          {isKeywordEnrichmentTask && typeof uncheckedKeywordCount === 'number' ? (
+                            <span className="ml-3 inline-flex rounded-full bg-white px-2 py-0.5 text-xs font-medium text-[#64748b] ring-1 ring-[#e5eaf2]">
+                              未检查总数 {formatTokenCount(uncheckedKeywordCount)}
+                            </span>
+                          ) : null}
+                          {isKeywordEnrichmentTask && typeof missingKeywordCount === 'number' ? (
+                            <span className="ml-2 inline-flex rounded-full bg-white px-2 py-0.5 text-xs font-medium text-[#64748b] ring-1 ring-[#e5eaf2]">
+                              缺失关键词 {formatTokenCount(missingKeywordCount)}
                             </span>
                           ) : null}
                         </div>

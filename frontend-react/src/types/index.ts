@@ -62,7 +62,7 @@ export interface ConferenceDefinition extends Conference {
   accentClass: string;
 }
 
-export type ConferenceSlug = 'iclr_2026' | 'neurips_2025' | 'icml_2025' | 'chi_2026' | 'cvpr_2026';
+export type ConferenceSlug = 'iclr_2026' | 'acl_2026' | 'neurips_2025' | 'icml_2025' | 'chi_2026' | 'cvpr_2026';
 
 export interface ChatMessage {
   id?: string;

@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 from analysis_context import build_analysis_prompt
 from code_availability import classify_code_availability_from_text
 from database import (
+    get_papers_pending_keyword_enrichment,
     get_papers_pending_code_availability,
     get_unanalyzed_papers,
     get_paper,
     update_llm_response,
+    update_paper_generated_keywords,
     update_paper_code_availability,
 )
+from keyword_enrichment import extract_keywords_for_paper
 from markdown_utils import normalize_llm_markdown
 from utils import get_or_cache_paper_content, ReaderError, truncate_content_for_llm
 
@@ -27,10 +30,14 @@ class BackgroundAnalyzer:
         self.last_run_failed_count = 0
         self.last_run_code_success_count = 0
         self.last_run_code_failed_count = 0
+        self.last_run_keyword_success_count = 0
+        self.last_run_keyword_failed_count = 0
         self.last_run_error = None
         self.last_analyzed_paper_id = None
         self.current_code_paper_id = None
         self.last_code_checked_paper_id = None
+        self.current_keyword_paper_id = None
+        self.last_keyword_enriched_paper_id = None
         self._wake_event = asyncio.Event()
 
     def status_snapshot(self) -> dict:
@@ -44,10 +51,14 @@ class BackgroundAnalyzer:
             "last_run_failed_count": self.last_run_failed_count,
             "last_run_code_success_count": self.last_run_code_success_count,
             "last_run_code_failed_count": self.last_run_code_failed_count,
+            "last_run_keyword_success_count": self.last_run_keyword_success_count,
+            "last_run_keyword_failed_count": self.last_run_keyword_failed_count,
             "last_run_error": self.last_run_error,
             "last_analyzed_paper_id": self.last_analyzed_paper_id,
             "current_code_paper_id": self.current_code_paper_id,
             "last_code_checked_paper_id": self.last_code_checked_paper_id,
+            "current_keyword_paper_id": self.current_keyword_paper_id,
+            "last_keyword_enriched_paper_id": self.last_keyword_enriched_paper_id,
         }
 
     def set_check_interval(self, check_interval: int) -> None:
@@ -154,6 +165,30 @@ class BackgroundAnalyzer:
         finally:
             self.current_code_paper_id = None
 
+    async def update_keywords(self, paper_info: dict) -> bool:
+        paper_id = paper_info.get("id")
+        if not paper_id:
+            return False
+
+        self.current_keyword_paper_id = paper_id
+        try:
+            result = await extract_keywords_for_paper(self.llm, paper_info)
+            await asyncio.to_thread(
+                update_paper_generated_keywords,
+                paper_id,
+                result.get("keywords") or [],
+                "generated",
+                result.get("meta"),
+            )
+            logger.info("[%s] 关键词补全完成: %s", paper_id, ", ".join(result.get("keywords") or []))
+            self.last_keyword_enriched_paper_id = paper_id
+            return True
+        except Exception as exc:
+            logger.warning("[%s] 关键词补全失败: %s", paper_id, exc)
+            return False
+        finally:
+            self.current_keyword_paper_id = None
+
     async def run(self):
         """主循环：每小时检查一次"""
         self.running = True
@@ -167,6 +202,8 @@ class BackgroundAnalyzer:
                 self.last_run_failed_count = 0
                 self.last_run_code_success_count = 0
                 self.last_run_code_failed_count = 0
+                self.last_run_keyword_success_count = 0
+                self.last_run_keyword_failed_count = 0
                 self.last_run_error = None
 
                 if not self.llm.is_configured():
@@ -207,6 +244,19 @@ class BackgroundAnalyzer:
                             self.last_run_code_success_count += 1
                         else:
                             self.last_run_code_failed_count += 1
+                        await asyncio.sleep(1)
+
+                pending_keyword_papers = await asyncio.to_thread(get_papers_pending_keyword_enrichment, limit=10)
+                if pending_keyword_papers:
+                    logger.info("发现 %s 篇待补全关键词的论文，开始处理...", len(pending_keyword_papers))
+                    for paper in pending_keyword_papers:
+                        if not self.running:
+                            break
+                        ok = await self.update_keywords(paper)
+                        if ok:
+                            self.last_run_keyword_success_count += 1
+                        else:
+                            self.last_run_keyword_failed_count += 1
                         await asyncio.sleep(1)
 
             except Exception as e:
