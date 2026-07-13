@@ -85,6 +85,7 @@ from database import (
     get_llm_provider,
     get_llm_token_usage_metrics,
     get_paper_marks,
+    get_reading_overview,
     get_presence_counts,
     get_presence_trend,
     get_user_by_email,
@@ -1253,6 +1254,18 @@ async def list_my_paper_marks(request: Request, paper_ids: str = ""):
         if not user:
             return {"marks": {}}
         return {"marks": get_paper_marks(user["id"], ids)}
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.get("/me/reading-overview")
+async def my_reading_overview(
+    days: int = 112,
+    user: dict = Depends(require_current_user),
+):
+    safe_days = min(max(days, 28), 366)
+    try:
+        return get_reading_overview(user["id"], safe_days)
     except DatabaseError as exc:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
 

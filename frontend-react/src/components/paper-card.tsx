@@ -135,7 +135,11 @@ export function PaperCard({
           {venue.label}
         </Badge>
         {paper.primary_area ? (
-          <Badge variant="outline" className="border-[#e6ebf2] bg-[#f8fafc] text-[#516072]">
+          <Badge
+            variant="outline"
+            className="max-w-full min-w-0 truncate border-[#e6ebf2] bg-[#f8fafc] text-[#516072]"
+            title={paper.primary_area}
+          >
             {paper.primary_area}
           </Badge>
         ) : null}
