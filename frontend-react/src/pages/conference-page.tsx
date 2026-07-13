@@ -5,10 +5,13 @@ import { Button } from '@/components/ui/button';
 import { PaginationBar } from '@/components/pagination-bar';
 import { PaperCard } from '@/components/paper-card';
 import { PaperReadFilterBar } from '@/components/paper-read-filter-bar';
+import { ReadingOverviewPanel } from '@/components/reading-overview';
 import { SearchControls } from '@/components/search-controls';
+import { useReadingOverview } from '@/hooks/use-reading-overview';
 import { fetchConferencePapers } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { getConferenceDefinition } from '@/lib/constants';
+import { getCollectionProgress } from '@/lib/reading-overview';
 import { applyCodeFilter, applyReadFilter, buildQueryString, navigate, parseCodeFilter, parseFilters, parsePage, parseReadFilter, useAppLocation } from '@/lib/router';
 import type { PaperCodeFilter, PaperListResponse, PaperReadFilter, SearchFilters } from '@/types';
 
@@ -43,6 +46,8 @@ export function ConferencePage({ venue }: ConferencePageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const readingOverview = useReadingOverview();
+  const collectionProgress = getCollectionProgress(readingOverview.overview?.collections ?? [], venue);
 
   useEffect(() => {
     setDraftQuery(query);
@@ -136,8 +141,9 @@ export function ConferencePage({ venue }: ConferencePageProps) {
   }
 
   return (
-    <div className="mx-auto max-w-6xl animate-fade-in">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto max-w-7xl animate-fade-in">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
+      <div className="xl:col-start-1 xl:row-start-1">
         <div className="space-y-2">
           <Button variant="ghost" className="rounded-full px-0 text-[#728095]" onClick={() => navigate('/')}>
             <ChevronLeft className="mr-1 h-4 w-4" />
@@ -150,17 +156,31 @@ export function ConferencePage({ venue }: ConferencePageProps) {
         </div>
       </div>
 
-      <SearchControls
-        query={draftQuery}
-        filters={draftFilters}
-        onQueryChange={setDraftQuery}
-        onFiltersChange={setDraftFilters}
-        onSubmit={submitSearch}
-        placeholder="搜索关键词... (Shift+Enter 搜索)"
-        compact
-      />
+      <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+        <SearchControls
+          query={draftQuery}
+          filters={draftFilters}
+          onQueryChange={setDraftQuery}
+          onFiltersChange={setDraftFilters}
+          onSubmit={submitSearch}
+          placeholder="搜索关键词... (Shift+Enter 搜索)"
+          compact
+        />
+      </div>
 
-      <div className="mt-6">
+      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-2 xl:row-span-2 xl:mx-0 xl:max-w-none xl:self-start">
+        <ReadingOverviewPanel
+          overview={readingOverview.overview}
+          isLoading={readingOverview.isLoading}
+          error={readingOverview.error}
+          isAuthenticated={readingOverview.isAuthenticated}
+          onRetry={() => void readingOverview.refresh()}
+          collections={collectionProgress ? [collectionProgress] : []}
+        />
+      </div>
+
+      <div className="min-w-0 xl:col-start-1 xl:row-start-3">
+      <div>
         <PaperReadFilterBar
           value={activeReadFilter}
           counts={results.read_counts}
@@ -205,6 +225,8 @@ export function ConferencePage({ venue }: ConferencePageProps) {
       )}
 
       <PaginationBar page={results.page} pages={results.pages} onPageChange={onPageChange} />
+      </div>
+      </div>
     </div>
   );
 }

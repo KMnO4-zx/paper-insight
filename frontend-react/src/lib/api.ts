@@ -24,6 +24,7 @@ import type {
   PaperReadFilter,
   PaperMark,
   PaperListResponse,
+  ReadingOverviewResponse,
   HfDailySyncResponse,
   SearchFilters,
   SortDirection,
@@ -292,6 +293,11 @@ export async function fetchMyPapers(
   return apiFetch<MarkedPaperListResponse>(`/me/papers?${params.toString()}`);
 }
 
+export async function fetchReadingOverview(days = 112): Promise<ReadingOverviewResponse> {
+  const params = new URLSearchParams({ days: String(days) });
+  return apiFetch<ReadingOverviewResponse>(`/me/reading-overview?${params.toString()}`);
+}
+
 export async function fetchFeishuWebhookSettings(): Promise<FeishuWebhookSettings> {
   return apiFetch<FeishuWebhookSettings>('/me/feishu-webhook');
 }
@@ -313,10 +319,16 @@ export async function updatePaperMark(
   paperId: string,
   mark: Partial<PaperMark>,
 ): Promise<PaperMark> {
-  return apiFetch<PaperMark>(paperMarkApiPath(paperId), {
+  const nextMark = await apiFetch<PaperMark>(paperMarkApiPath(paperId), {
     method: 'PUT',
     body: JSON.stringify(mark),
   });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('paper:mark-changed', {
+      detail: { paperId, mark: nextMark },
+    }));
+  }
+  return nextMark;
 }
 
 export async function fetchAdminOnlineMetrics(range: '24h' | '7d'): Promise<AdminOnlineMetrics> {

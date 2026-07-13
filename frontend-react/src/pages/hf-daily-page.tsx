@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, Loader2, Sparkles } from 'lucide-react';
+import { CalendarDays, ChevronLeft, Loader2 } from 'lucide-react';
 
+import huggingFaceLogo from '@/assets/hugging-face.svg';
 import { Button } from '@/components/ui/button';
 import { PaginationBar } from '@/components/pagination-bar';
 import { PaperCard } from '@/components/paper-card';
 import { PaperReadFilterBar } from '@/components/paper-read-filter-bar';
+import { ReadingOverviewPanel } from '@/components/reading-overview';
 import { SearchControls } from '@/components/search-controls';
+import { useReadingOverview } from '@/hooks/use-reading-overview';
 import { fetchHfDailyPapers } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { applyCodeFilter, applyReadFilter, buildQueryString, navigate, parseCodeFilter, parseFilters, parsePage, parseReadFilter, useAppLocation } from '@/lib/router';
@@ -227,6 +230,7 @@ export function HfDailyPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const readingOverview = useReadingOverview();
   const sortedPapers = useMemo(() => [...results.papers].sort(compareHfDailyPapers), [results.papers]);
   const timelineItems = useMemo(() => buildTimelineItems(sortedPapers), [sortedPapers]);
   const [activeDate, setActiveDate] = useState<string | null>(null);
@@ -373,8 +377,9 @@ export function HfDailyPage() {
         : `共 ${results.total} 篇论文`;
 
   return (
-    <div className={hasTimeline ? 'mx-auto max-w-7xl animate-fade-in' : 'mx-auto max-w-6xl animate-fade-in'}>
-      <div className={hasTimeline ? 'lg:grid lg:grid-cols-[10rem_minmax(0,1fr)] lg:gap-6' : ''}>
+    <div className="mx-auto max-w-[90rem] animate-fade-in">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
+      <div className={hasTimeline ? 'min-w-0 lg:grid lg:grid-cols-[10rem_minmax(0,1fr)] lg:gap-6 xl:col-start-1 xl:row-start-1' : 'min-w-0 xl:col-start-1 xl:row-start-1'}>
         {hasTimeline ? <div className="hidden lg:block" /> : null}
 
         <div className="min-w-0">
@@ -386,7 +391,7 @@ export function HfDailyPage() {
               </Button>
               <div>
                 <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-sm text-[#7a4b00] shadow-sm ring-1 ring-black/5">
-                  <Sparkles className="h-4 w-4 text-[#ff9900]" />
+                  <img src={huggingFaceLogo} alt="" className="h-4 w-4" aria-hidden="true" />
                   Hugging Face Daily Papers
                 </div>
                 <h1 className="text-3xl font-semibold text-[#172033]">Hugging Face Daily Papers</h1>
@@ -424,6 +429,21 @@ export function HfDailyPage() {
             <HfDailyTimeline items={timelineItems} activeDate={activeDate} onSelectDate={scrollToDate} compact />
           </div>
         </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:mx-0 xl:max-w-none xl:self-start">
+        <ReadingOverviewPanel
+          overview={readingOverview.overview}
+          isLoading={readingOverview.isLoading}
+          error={readingOverview.error}
+          isAuthenticated={readingOverview.isAuthenticated}
+          onRetry={() => void readingOverview.refresh()}
+          showCollections={false}
+        />
+      </div>
+
+      <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+      <div className={hasTimeline ? 'lg:grid lg:grid-cols-[10rem_minmax(0,1fr)] lg:gap-6' : ''}>
 
         {isLoading ? (
           <div className={hasTimeline ? 'mt-8 lg:col-start-2' : 'mt-8'}>
@@ -488,6 +508,8 @@ export function HfDailyPage() {
         <div className={hasTimeline ? 'lg:col-start-2' : ''}>
           <PaginationBar page={results.page} pages={results.pages} onPageChange={onPageChange} />
         </div>
+      </div>
+      </div>
       </div>
     </div>
   );

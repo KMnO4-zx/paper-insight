@@ -25,6 +25,14 @@ _CACHE_TTL_SECONDS = 86400
 _READ_FILTER_SEARCH_LIMIT = 1_000_000
 CODE_AVAILABILITY_STATUSES = {"open_source", "unavailable", "not_found", "unknown"}
 CODE_FILTERS = CODE_AVAILABILITY_STATUSES | {"all", "not_open_source"}
+READING_OVERVIEW_COLLECTIONS = (
+    ("acl_2026", "ACL 2026"),
+    ("iclr_2026", "ICLR 2026"),
+    ("chi_2026", "CHI 2026"),
+    ("cvpr_2026", "CVPR 2026"),
+    ("neurips_2025", "NeurIPS 2025"),
+    ("icml_2025", "ICML 2025"),
+)
 
 
 class DatabaseError(Exception):
@@ -95,6 +103,14 @@ def _usage_timezone() -> ZoneInfo:
         return ZoneInfo(settings.hf_daily.timezone)
     except ZoneInfoNotFoundError:
         logger.warning("LLM token usage timezone 无效，回退到 UTC: %s", settings.hf_daily.timezone)
+        return ZoneInfo("UTC")
+
+
+def _reading_timezone() -> ZoneInfo:
+    try:
+        return ZoneInfo(settings.hf_daily.timezone)
+    except ZoneInfoNotFoundError:
+        logger.warning("阅读概览 timezone 无效，回退到 UTC: %s", settings.hf_daily.timezone)
         return ZoneInfo("UTC")
 
 
@@ -2120,6 +2136,218 @@ def get_llm_token_usage_metrics() -> dict:
     return _run_with_retry(operation, "get_llm_token_usage_metrics")
 
 
+def _build_reading_activity(
+    rows: list[dict],
+    today: date,
+    days: int,
+) -> dict:
+    safe_days = min(max(days, 28), 366)
+    counts: dict[date, int] = {}
+    for row in rows:
+        activity_date = row.get("activity_date")
+        if isinstance(activity_date, datetime):
+            activity_date = activity_date.date()
+        if not isinstance(activity_date, date):
+            continue
+        counts[activity_date] = _as_nonnegative_int(row.get("paper_count"))
+
+    start_date = today - timedelta(days=safe_days - 1)
+    activity_days = [
+        {
+            "date": (start_date + timedelta(days=offset)).isoformat(),
+            "count": counts.get(start_date + timedelta(days=offset), 0),
+        }
+        for offset in range(safe_days)
+    ]
+
+    month_count = sum(
+        count
+        for activity_date, count in counts.items()
+        if activity_date.year == today.year and activity_date.month == today.month
+    )
+
+    # A streak remains current until the end of the following day, so a user
+    # who has not read yet today does not lose yesterday's streak prematurely.
+    streak_cursor = today
+    if counts.get(streak_cursor, 0) <= 0:
+        streak_cursor -= timedelta(days=1)
+    current_streak = 0
+    while counts.get(streak_cursor, 0) > 0:
+        current_streak += 1
+        streak_cursor -= timedelta(days=1)
+
+    return {
+        "days": activity_days,
+        "today_count": counts.get(today, 0),
+        "month_count": month_count,
+        "current_streak": current_streak,
+    }
+
+
+def get_reading_overview(
+    user_id: str,
+    days: int = 112,
+    now: datetime | None = None,
+) -> dict:
+    safe_days = min(max(days, 28), 366)
+    tz = _reading_timezone()
+    timezone_name = getattr(tz, "key", settings.hf_daily.timezone)
+    local_now = now.astimezone(tz) if now is not None else datetime.now(tz)
+    today = local_now.date()
+    tomorrow_start = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    activity_end_utc = tomorrow_start.astimezone(timezone.utc)
+
+    def operation() -> dict:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        (first_viewed_at AT TIME ZONE %s)::date AS activity_date,
+                        COUNT(*) AS paper_count
+                    FROM paper_marks
+                    WHERE user_id = %s
+                      AND first_viewed_at IS NOT NULL
+                      AND first_viewed_at < %s
+                    GROUP BY 1
+                    ORDER BY 1
+                    """,
+                    (timezone_name, user_id, activity_end_utc),
+                )
+                activity_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    WITH latest_day AS (
+                        SELECT MAX(daily_date) AS daily_date
+                        FROM hf_daily_papers
+                        WHERE daily_date <= %s
+                    )
+                    SELECT
+                        h.daily_date,
+                        h.paper_id,
+                        h.rank,
+                        p.title,
+                        COALESCE(pm.viewed, FALSE) AS viewed
+                    FROM latest_day latest
+                    JOIN hf_daily_papers h ON h.daily_date = latest.daily_date
+                    JOIN papers p ON p.id = h.paper_id
+                    LEFT JOIN paper_marks pm
+                      ON pm.user_id = %s
+                     AND pm.paper_id = h.paper_id
+                    ORDER BY h.rank ASC, h.upvotes DESC, p.title ASC, h.paper_id ASC
+                    LIMIT 5
+                    """,
+                    (today, user_id),
+                )
+                hf_rows = cur.fetchall()
+
+                collection_total_queries: list[str] = []
+                collection_total_params: list[object] = []
+                for sort_order, (collection_id, label) in enumerate(READING_OVERVIEW_COLLECTIONS):
+                    conference_name, year_text = label.rsplit(" ", 1)
+                    upper_bound = f"{conference_name} {int(year_text) + 1}"
+                    collection_total_queries.append(
+                        """
+                        SELECT
+                            %s::text AS id,
+                            %s::text AS label,
+                            %s::integer AS sort_order,
+                            COUNT(*) AS total
+                        FROM papers
+                        WHERE venue >= %s
+                          AND venue < %s
+                          AND venue LIKE %s
+                        """
+                    )
+                    collection_total_params.extend(
+                        (collection_id, label, sort_order, label, upper_bound, f"{label}%")
+                    )
+                cur.execute(
+                    f"""
+                    {' UNION ALL '.join(collection_total_queries)}
+                    ORDER BY sort_order
+                    """,
+                    collection_total_params,
+                )
+                collection_rows = cur.fetchall()
+
+                read_case_parts: list[str] = []
+                collection_read_params: list[object] = []
+                for collection_id, label in READING_OVERVIEW_COLLECTIONS:
+                    read_case_parts.append("WHEN p.venue LIKE %s THEN %s::text")
+                    collection_read_params.extend((f"{label}%", collection_id))
+                cur.execute(
+                    f"""
+                    SELECT collection_id AS id, COUNT(*) AS read
+                    FROM (
+                        SELECT CASE
+                            {' '.join(read_case_parts)}
+                            ELSE NULL
+                        END AS collection_id
+                        FROM paper_marks pm
+                        JOIN papers p ON p.id = pm.paper_id
+                        WHERE pm.user_id = %s
+                          AND pm.viewed = TRUE
+                    ) user_read_papers
+                    WHERE collection_id IS NOT NULL
+                    GROUP BY collection_id
+                    """,
+                    [*collection_read_params, user_id],
+                )
+                collection_read_rows = cur.fetchall()
+
+        activity = _build_reading_activity(activity_rows, today, safe_days)
+
+        if hf_rows:
+            hf_date = hf_rows[0]["daily_date"]
+            hf_items = [
+                {
+                    "paper_id": row["paper_id"],
+                    "title": row.get("title"),
+                    "rank": int(row["rank"]),
+                    "viewed": bool(row["viewed"]),
+                }
+                for row in hf_rows
+            ]
+            hf_daily = {
+                "daily_date": hf_date.isoformat(),
+                "is_today": hf_date == today,
+                "read": sum(1 for item in hf_items if item["viewed"]),
+                "total": len(hf_items),
+                "items": hf_items,
+            }
+        else:
+            hf_daily = None
+
+        read_by_collection = {
+            row["id"]: _as_nonnegative_int(row.get("read"))
+            for row in collection_read_rows
+        }
+        collections = []
+        for row in collection_rows:
+            total = _as_nonnegative_int(row.get("total"))
+            read = min(read_by_collection.get(row["id"], 0), total)
+            collections.append(
+                {
+                    "id": row["id"],
+                    "label": row["label"],
+                    "read": read,
+                    "total": total,
+                    "percent": round((read / total) * 100, 1) if total else 0.0,
+                }
+            )
+
+        return {
+            "timezone": timezone_name,
+            "activity": activity,
+            "hf_daily": hf_daily,
+            "collections": collections,
+        }
+
+    return _run_with_retry(operation, f"get_reading_overview:{user_id}:{safe_days}")
+
+
 def get_paper_marks(user_id: str, paper_ids: list[str]) -> dict[str, dict]:
     if not paper_ids:
         return {}
@@ -2129,7 +2357,8 @@ def get_paper_marks(user_id: str, paper_ids: list[str]) -> dict[str, dict]:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT paper_id, viewed, liked, favorited, viewed_at, liked_at, favorited_at, updated_at
+                    SELECT paper_id, viewed, liked, favorited,
+                           first_viewed_at, viewed_at, liked_at, favorited_at, updated_at
                     FROM paper_marks
                     WHERE user_id = %s AND paper_id = ANY(%s)
                     """,
@@ -2141,6 +2370,7 @@ def get_paper_marks(user_id: str, paper_ids: list[str]) -> dict[str, dict]:
                 "viewed": bool(row["viewed"]),
                 "liked": bool(row["liked"]),
                 "favorited": bool(row["favorited"]),
+                "first_viewed_at": row["first_viewed_at"],
                 "viewed_at": row["viewed_at"],
                 "liked_at": row["liked_at"],
                 "favorited_at": row["favorited_at"],
@@ -2195,6 +2425,7 @@ def list_marked_papers(
                         pm.viewed,
                         pm.liked,
                         pm.favorited,
+                        pm.first_viewed_at,
                         pm.viewed_at,
                         pm.liked_at,
                         pm.favorited_at,
@@ -2242,6 +2473,7 @@ def list_marked_papers(
                     "viewed": bool(row["viewed"]),
                     "liked": bool(row["liked"]),
                     "favorited": bool(row["favorited"]),
+                    "first_viewed_at": row["first_viewed_at"],
                     "viewed_at": row["viewed_at"],
                     "liked_at": row["liked_at"],
                     "favorited_at": row["favorited_at"],
@@ -2384,10 +2616,12 @@ def set_paper_mark(
                 cur.execute(
                     """
                     INSERT INTO paper_marks (
-                        user_id, paper_id, viewed, liked, favorited, viewed_at, liked_at, favorited_at, updated_at
+                        user_id, paper_id, viewed, liked, favorited,
+                        first_viewed_at, viewed_at, liked_at, favorited_at, updated_at
                     )
                     VALUES (
                         %s, %s, %s, %s, %s,
+                        CASE WHEN %s THEN NOW() ELSE NULL END,
                         CASE WHEN %s THEN NOW() ELSE NULL END,
                         CASE WHEN %s THEN NOW() ELSE NULL END,
                         CASE WHEN %s THEN NOW() ELSE NULL END,
@@ -2397,6 +2631,7 @@ def set_paper_mark(
                         viewed = EXCLUDED.viewed,
                         liked = EXCLUDED.liked,
                         favorited = EXCLUDED.favorited,
+                        first_viewed_at = COALESCE(paper_marks.first_viewed_at, EXCLUDED.first_viewed_at),
                         viewed_at = CASE
                             WHEN EXCLUDED.viewed THEN COALESCE(paper_marks.viewed_at, NOW())
                             ELSE NULL
@@ -2410,7 +2645,8 @@ def set_paper_mark(
                             ELSE NULL
                         END,
                         updated_at = NOW()
-                    RETURNING paper_id, viewed, liked, favorited, viewed_at, liked_at, favorited_at, updated_at
+                    RETURNING paper_id, viewed, liked, favorited,
+                              first_viewed_at, viewed_at, liked_at, favorited_at, updated_at
                     """,
                     (
                         user_id,
@@ -2418,6 +2654,7 @@ def set_paper_mark(
                         next_viewed,
                         next_liked,
                         next_favorited,
+                        next_viewed,
                         next_viewed,
                         next_liked,
                         next_favorited,
@@ -2430,6 +2667,7 @@ def set_paper_mark(
             "viewed": bool(row["viewed"]),
             "liked": bool(row["liked"]),
             "favorited": bool(row["favorited"]),
+            "first_viewed_at": row["first_viewed_at"],
             "viewed_at": row["viewed_at"],
             "liked_at": row["liked_at"],
             "favorited_at": row["favorited_at"],
@@ -2471,10 +2709,11 @@ def migrate_anonymous_data(user_id: str, anonymous_user_id: str | None, marks: d
                         """
                         INSERT INTO paper_marks (
                             user_id, paper_id, viewed, liked, favorited,
-                            viewed_at, liked_at, favorited_at, updated_at
+                            first_viewed_at, viewed_at, liked_at, favorited_at, updated_at
                         )
                         VALUES (
                             %s, %s, %s, %s, %s,
+                            CASE WHEN %s THEN NOW() ELSE NULL END,
                             CASE WHEN %s THEN NOW() ELSE NULL END,
                             CASE WHEN %s THEN NOW() ELSE NULL END,
                             CASE WHEN %s THEN NOW() ELSE NULL END,
@@ -2484,6 +2723,7 @@ def migrate_anonymous_data(user_id: str, anonymous_user_id: str | None, marks: d
                             viewed = paper_marks.viewed OR EXCLUDED.viewed,
                             liked = paper_marks.liked OR EXCLUDED.liked,
                             favorited = paper_marks.favorited OR EXCLUDED.favorited,
+                            first_viewed_at = COALESCE(paper_marks.first_viewed_at, EXCLUDED.first_viewed_at),
                             viewed_at = CASE
                                 WHEN paper_marks.viewed OR EXCLUDED.viewed THEN COALESCE(paper_marks.viewed_at, NOW())
                                 ELSE NULL
@@ -2498,7 +2738,7 @@ def migrate_anonymous_data(user_id: str, anonymous_user_id: str | None, marks: d
                             END,
                             updated_at = NOW()
                         """,
-                        (user_id, paper_id, viewed, liked, favorited, viewed, liked, favorited),
+                        (user_id, paper_id, viewed, liked, favorited, viewed, viewed, liked, favorited),
                     )
                     migrated_marks += 1
             conn.commit()

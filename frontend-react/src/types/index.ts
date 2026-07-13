@@ -121,6 +121,7 @@ export interface PaperMark {
   viewed: boolean;
   liked: boolean;
   favorited: boolean;
+  first_viewed_at?: string | null;
   viewed_at?: string | null;
   liked_at?: string | null;
   favorited_at?: string | null;
@@ -140,6 +141,48 @@ export interface MarkedPaperListResponse {
   total: number;
   page: number;
   pages: number;
+}
+
+export interface ReadingActivityDay {
+  date: string;
+  count: number;
+}
+
+export interface ReadingActivitySummary {
+  days: ReadingActivityDay[];
+  today_count: number;
+  month_count: number;
+  current_streak: number;
+}
+
+export interface HfDailyReadingItem {
+  paper_id: string;
+  title: string;
+  rank: number;
+  viewed: boolean;
+}
+
+export interface HfDailyReadingProgress {
+  daily_date: string;
+  is_today: boolean;
+  read: number;
+  total: number;
+  items: HfDailyReadingItem[];
+}
+
+export interface CollectionReadingProgress {
+  id: string;
+  label: string;
+  read: number;
+  total: number;
+  percent: number;
+}
+
+export interface ReadingOverviewResponse {
+  timezone: string;
+  activity: ReadingActivitySummary;
+  hf_daily: HfDailyReadingProgress | null;
+  collections: CollectionReadingProgress[];
 }
 
 export interface AuthUser {

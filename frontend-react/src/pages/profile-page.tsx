@@ -4,7 +4,9 @@ import { Bell, Bookmark, BookMarked, ChevronLeft, Eye, Heart, Loader2, Send } fr
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PaginationBar } from '@/components/pagination-bar';
+import { ReadingOverviewPanel } from '@/components/reading-overview';
 import { RichContent } from '@/components/rich-content';
+import { useReadingOverview } from '@/hooks/use-reading-overview';
 import {
   fetchFeishuWebhookSettings,
   fetchMyPapers,
@@ -126,7 +128,11 @@ function PaperHistoryCard({ item }: { item: MarkedPaperItem }) {
           {venue.label}
         </Badge>
         {paper.primary_area ? (
-          <Badge variant="outline" className="border-[#e6ebf2] bg-[#f8fafc] text-[#516072]">
+          <Badge
+            variant="outline"
+            className="max-w-full min-w-0 truncate border-[#e6ebf2] bg-[#f8fafc] text-[#516072]"
+            title={paper.primary_area}
+          >
             {paper.primary_area}
           </Badge>
         ) : null}
@@ -207,6 +213,7 @@ export function ProfilePage() {
   const [isFeishuTesting, setIsFeishuTesting] = useState(false);
   const [feishuMessage, setFeishuMessage] = useState<string | null>(null);
   const [feishuError, setFeishuError] = useState<string | null>(null);
+  const readingOverview = useReadingOverview();
 
   const { filter, sort, page } = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -321,7 +328,7 @@ export function ProfilePage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl animate-fade-in">
+    <div className="mx-auto max-w-7xl animate-fade-in">
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
           <Button variant="ghost" className="rounded-full px-0 text-[#728095]" onClick={() => navigate('/')}>
@@ -343,7 +350,8 @@ export function ProfilePage() {
         </div>
       </div>
 
-      <section className="mb-6 rounded-[28px] bg-white/85 p-5 shadow-sm ring-1 ring-black/5">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
+      <section className="rounded-[28px] bg-white/85 p-5 shadow-sm ring-1 ring-black/5 xl:col-start-1 xl:row-start-1">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -425,6 +433,18 @@ export function ProfilePage() {
         </div>
       </section>
 
+      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:mx-0 xl:max-h-[calc(100dvh-8rem)] xl:max-w-none xl:self-start xl:overflow-y-auto xl:overscroll-contain">
+        <ReadingOverviewPanel
+          overview={readingOverview.overview}
+          isLoading={readingOverview.isLoading}
+          error={readingOverview.error}
+          isAuthenticated={readingOverview.isAuthenticated}
+          onRetry={() => void readingOverview.refresh()}
+        />
+      </div>
+
+      <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+
       <section className="rounded-[28px] bg-white/80 p-4 shadow-sm ring-1 ring-black/5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
@@ -478,6 +498,8 @@ export function ProfilePage() {
       )}
 
       <PaginationBar page={results.page} pages={results.pages} onPageChange={(nextPage) => updateQuery({ page: nextPage })} />
+      </div>
+      </div>
     </div>
   );
 }
