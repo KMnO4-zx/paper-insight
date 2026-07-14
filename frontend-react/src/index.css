@@ -569,6 +569,10 @@
     color: #ff9900;
   }
 
+  .changelog-markdown p:has(a > img) + p {
+    text-align: center;
+  }
+
   .markdown-body code {
     border-radius: 0.5rem;
     background: #f1f5f9;

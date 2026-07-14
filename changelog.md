@@ -1,4 +1,9 @@
-# Paper Insight 每天都在变好，希望大家多多反馈、支持！
+[![扫码加入 Paper Insight 微信交流群](/images/wechat-group.png)](/images/wechat-group.png)
+
+*欢迎加入 Paper Insight 微信交流群，交流论文、功能建议与使用反馈。*\
+*如果想给作者发邮件的话，请前往作者 Github 主页的邮箱地址联系。*
+
+> 注：请勿在群内发布广告、招聘、刷屏等信息，违者将被移出群聊。
 
 ## 2026-07-14
 

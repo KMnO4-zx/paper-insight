@@ -5,21 +5,35 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { Button } from '@/components/ui/button';
-import { fetchChangelogMarkdown } from '@/lib/api';
+import { apiUrl, fetchChangelogMarkdown } from '@/lib/api';
 
 const changelogMarkdownComponents: Components = {
   a: ({ node: _node, href, children, ...props }) => {
     void _node;
     const isExternal = Boolean(href && !href.startsWith('#'));
+    const resolvedHref = href?.startsWith('/') ? apiUrl(href) : href;
     return (
       <a
         {...props}
-        href={href}
+        href={resolvedHref}
         target={isExternal ? '_blank' : undefined}
         rel={isExternal ? 'noreferrer' : undefined}
       >
         {children}
       </a>
+    );
+  },
+  img: ({ node: _node, src, alt, ...props }) => {
+    void _node;
+    const resolvedSrc = typeof src === 'string' && src.startsWith('/') ? apiUrl(src) : src;
+    return (
+      <img
+        {...props}
+        src={resolvedSrc}
+        alt={alt ?? ''}
+        loading="lazy"
+        className="mx-auto h-auto w-full max-w-[18rem] rounded-[1.5rem] border border-[#e2e8f0] bg-white shadow-[0_16px_45px_rgba(15,23,42,0.12)]"
+      />
     );
   },
 };
@@ -65,7 +79,7 @@ export function ChangelogPage() {
           <Button
             type="button"
             variant="outline"
-            className="h-10 rounded-full border-[#d8e0ea] bg-white/78 px-4 text-sm font-semibold text-[#425166] shadow-sm transition hover:bg-white"
+            className="h-10 rounded-full border-[#d8e0ea] bg-white/78 px-4 text-sm font-semibold text-[#425166] shadow-sm transition hover:bg-white hover:text-[#425166]"
             onClick={() => void loadChangelog()}
             disabled={isLoading}
           >
