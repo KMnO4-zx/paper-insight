@@ -383,7 +383,7 @@ export function HfDailyPage() {
         {hasTimeline ? <div className="hidden lg:block" /> : null}
 
         <div className="min-w-0">
-          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-2">
               <Button variant="ghost" className="rounded-full px-0 text-[#728095]" onClick={() => navigate('/')}>
                 <ChevronLeft className="mr-1 h-4 w-4" />
@@ -399,7 +399,13 @@ export function HfDailyPage() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
 
+      <div className={hasTimeline ? 'min-w-0 lg:grid lg:grid-cols-[10rem_minmax(0,1fr)] lg:gap-6 xl:col-start-1 xl:row-start-2' : 'min-w-0 xl:col-start-1 xl:row-start-2'}>
+        {hasTimeline ? <div className="hidden lg:block" /> : null}
+
+        <div className="min-w-0">
           <SearchControls
             query={draftQuery}
             filters={draftFilters}
@@ -431,7 +437,7 @@ export function HfDailyPage() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:mx-0 xl:max-w-none xl:self-start">
+      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-2 xl:row-span-2 xl:mx-0 xl:max-w-none xl:self-start">
         <ReadingOverviewPanel
           overview={readingOverview.overview}
           isLoading={readingOverview.isLoading}
@@ -442,7 +448,7 @@ export function HfDailyPage() {
         />
       </div>
 
-      <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+      <div className="min-w-0 xl:col-start-1 xl:row-start-3">
       <div className={hasTimeline ? 'lg:grid lg:grid-cols-[10rem_minmax(0,1fr)] lg:gap-6' : ''}>
 
         {isLoading ? (
