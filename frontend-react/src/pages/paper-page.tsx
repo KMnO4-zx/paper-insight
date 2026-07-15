@@ -285,7 +285,7 @@ export function PaperPage({ paperId }: PaperPageProps) {
   };
 
   return (
-    <div className="mx-auto max-w-[96rem] animate-fade-in">
+    <div className="mx-auto max-w-5xl animate-fade-in">
       <div
         className="mb-4 origin-left transition-[opacity,transform] duration-150"
         style={{
@@ -311,9 +311,8 @@ export function PaperPage({ paperId }: PaperPageProps) {
         </Button>
       </div>
 
-      <div className="grid gap-6 xl:items-start xl:grid-cols-[minmax(0,1.55fr)_minmax(24rem,0.95fr)] 2xl:grid-cols-[minmax(0,1.7fr)_minmax(26rem,1.02fr)]">
-        <div className="space-y-6">
-          <section className="rounded-[32px] bg-white p-6 shadow-sm ring-1 ring-black/5">
+      <div className="space-y-6">
+        <section className="rounded-[32px] bg-white p-6 shadow-sm ring-1 ring-black/5">
             {paperLoading ? (
               <div className="flex items-center gap-2 text-[#728095]">
                 <Loader2 className="h-5 w-5 animate-spin" />
@@ -482,9 +481,9 @@ export function PaperPage({ paperId }: PaperPageProps) {
                 </div>
               </div>
             ) : null}
-          </section>
+        </section>
 
-          <section className="rounded-[32px] bg-white p-6 shadow-sm ring-1 ring-black/5">
+        <section className="rounded-[32px] bg-white p-6 shadow-sm ring-1 ring-black/5">
             <div className="flex flex-col gap-3 border-b border-[#eef2f7] pb-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex shrink-0 items-center gap-2">
                 <Sparkles className="h-5 w-5 text-[#ff9900]" />
@@ -525,13 +524,10 @@ export function PaperPage({ paperId }: PaperPageProps) {
                 ) : null}
               </div>
             )}
-          </section>
-        </div>
-
-        <div className="min-h-0 xl:sticky xl:top-6 xl:self-start">
-          <ChatPanel paperId={paperId} />
-        </div>
+        </section>
       </div>
+
+      <ChatPanel key={paperId} paperId={paperId} />
     </div>
   );
 }
