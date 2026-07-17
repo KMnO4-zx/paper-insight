@@ -2,6 +2,16 @@
 
 这个文档记录 Paper Insight 的本地开发、数据准备和部署流程。README 只保留项目必要信息，开发者相关细节统一放在这里。
 
+## 启动指令(开发者)
+
+```bash
+brew services start postgresql@16
+
+cd backend
+uv run uvicorn app:app --reload --host 127.0.0.1 --port 8000
+```
+
+
 ## 当前项目状态
 
 Paper Insight 当前使用：
