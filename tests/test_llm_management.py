@@ -124,6 +124,18 @@ async def test_managed_llm_chat_records_usage(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_managed_llm_analysis_uses_stable_default_temperature():
+    completions = FakeCompletions()
+    llm = managed_llm_with_fake_client(completions)
+
+    output = await llm.get_response("paper content")
+
+    assert output == "7"
+    assert completions.calls[0]["temperature"] == llm_module.DEFAULT_ANALYSIS_TEMPERATURE
+    assert llm_module.DEFAULT_ANALYSIS_TEMPERATURE == 0.3
+
+
+@pytest.mark.asyncio
 async def test_one_token_uses_max_tokens_limit():
     completions = FakeCompletions()
     llm = managed_llm_with_fake_client(completions)

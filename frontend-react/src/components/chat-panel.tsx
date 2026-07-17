@@ -232,6 +232,13 @@ export function ChatPanel({ paperId }: ChatPanelProps) {
               ),
             );
           }
+          if (event === 'final') {
+            setMessages((currentMessages) =>
+              currentMessages.map((message) =>
+                message.id === assistantId ? { ...message, content: data } : message,
+              ),
+            );
+          }
           if (event === 'error') {
             throw new Error(data || '对话流中断');
           }

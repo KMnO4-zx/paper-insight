@@ -33,6 +33,18 @@ describe('normalizeMarkdownContent', () => {
 
     expect(normalized).toContain('开源代码仓库链接：https://github.com/lasr-spelling/sae-spelling\n\n# 问题1：论文要解决什么任务？');
   });
+
+  it('repairs the duplicated headings and same-line block math seen in production', () => {
+    const normalized = normalizeMarkdownContent(
+      '# # 1. 论文解决的任务\n\n# #\n\n核心公式为：\n$$S = 0.5 S_{Loc} + 0.5 S_{Reason}$$\n其中如下。',
+      { analysisMode: true },
+    );
+
+    expect(normalized).toContain('# 1. 论文解决的任务');
+    expect(normalized).not.toContain('# #');
+    expect(normalized).toContain('$$\nS = 0.5 S_{Loc} + 0.5 S_{Reason}\n$$');
+    expect(normalizeMarkdownContent(normalized, { analysisMode: true })).toBe(normalized);
+  });
 });
 
 describe('splitStreamingMarkdown', () => {
@@ -59,6 +71,19 @@ describe('RichContent', () => {
 
     expect(html).toContain('katex');
     expect(html).toContain('The rate is');
+  });
+
+  it('renders repaired production block math as display math', () => {
+    const html = renderToStaticMarkup(
+      <RichContent
+        content={'核心公式为：\n$$S = 0.5 S_{Loc} + 0.5 S_{Reason}$$'}
+        analysisMode
+        className="markdown-body"
+      />,
+    );
+
+    expect(html).toContain('katex-display');
+    expect(html).not.toContain('math-inline');
   });
 
   it('does not render code blocks as math', () => {
