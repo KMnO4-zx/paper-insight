@@ -34,3 +34,21 @@ def test_normalize_llm_markdown_splits_inline_heading_fragments():
         "开源代码仓库链接：https://github.com/lasr-spelling/sae-spelling\n\n# 问题1：论文要解决什么任务？"
         in normalized
     )
+
+
+def test_normalize_llm_markdown_repairs_production_heading_and_block_math_shape():
+    normalized = normalize_llm_markdown(
+        "# # 1. 论文解决的任务\n\n# #\n\n核心公式为：\n$$S = 0.5 S_{Loc} + 0.5 S_{Reason}$$\n其中如下。",
+        analysis_mode=True,
+    )
+
+    assert "# 1. 论文解决的任务" in normalized
+    assert "# #" not in normalized
+    assert "$$\nS = 0.5 S_{Loc} + 0.5 S_{Reason}\n$$" in normalized
+
+
+def test_normalize_llm_markdown_production_repairs_are_idempotent():
+    content = "## ## 2. 指标\n\n$$F1 = 2 \\times \\frac{PR}{P+R}$$"
+    normalized = normalize_llm_markdown(content, analysis_mode=True)
+
+    assert normalize_llm_markdown(normalized, analysis_mode=True) == normalized

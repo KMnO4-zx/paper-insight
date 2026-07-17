@@ -2,6 +2,7 @@ import re
 
 
 CODE_SEGMENT_PATTERN = re.compile(r"```[\s\S]*?(?:```|$)|`[^`\n]*`")
+SAME_LINE_BLOCK_MATH_PATTERN = re.compile(r"^([ \t]*)\$\$[ \t]*(\S(?:.*?\S)?)[ \t]*\$\$[ \t]*$", re.MULTILINE)
 
 
 def _mask_code_segments(content: str) -> tuple[str, list[str]]:
@@ -61,6 +62,14 @@ def _normalize_bracket_math(content: str) -> str:
     return re.sub(r"\\\((.+?)\\\)", _replace_inline, content)
 
 
+def _normalize_same_line_block_math(content: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        indentation, expression = match.groups()
+        return f"{indentation}$$\n{indentation}{expression.strip()}\n{indentation}$$"
+
+    return SAME_LINE_BLOCK_MATH_PATTERN.sub(_replace, content)
+
+
 def _normalize_heading_marker_prefix(line: str) -> str:
     return re.sub(
         r"^([ \t]{0,3})([＃#]{1,6})(?=\s*\S)",
@@ -103,6 +112,18 @@ def _normalize_markdown_line(line: str) -> str:
         line,
     )
     line = re.sub(r"^(#{1,6})(\S)", r"\1 \2", line)
+
+    duplicate_heading = re.match(
+        r"^([ \t]{0,3})(#{1,6})[ \t]+#{1,6}(?:[ \t]+(.*?))?[ \t]*$",
+        line,
+    )
+    if duplicate_heading:
+        leading, marker, title = duplicate_heading.groups()
+        return f"{leading}{marker} {title.strip()}" if title and title.strip() else ""
+
+    if re.match(r"^[ \t]{0,3}#{1,6}[ \t]*$", line):
+        return ""
+
     line = re.sub(r"^([ \t]{0,3}[-*+])(\S)", r"\1 \2", line)
     return re.sub(r"^([ \t]{0,3}\d+[.)、])(\S)", r"\1 \2", line)
 
@@ -122,16 +143,18 @@ def normalize_llm_markdown(content: str | None, analysis_mode: bool = False) -> 
         return ""
 
     masked, segments = _mask_code_segments(content.replace("\r\n", "\n").replace("\r", "\n"))
-    normalized = _normalize_escaped_inline_math(
-        _normalize_bracket_math(
-            re.sub(
-                r"\$\$([\s\S]+?)\\\$\$",
-                lambda match: f"$${match.group(1)}$$",
+    normalized = _normalize_same_line_block_math(
+        _normalize_escaped_inline_math(
+            _normalize_bracket_math(
                 re.sub(
-                    r"\\\$\$([\s\S]+?)\$\$",
+                    r"\$\$([\s\S]+?)\\\$\$",
                     lambda match: f"$${match.group(1)}$$",
-                    re.sub(r"\\\$\$([\s\S]+?)\\\$\$", lambda match: f"$${match.group(1)}$$", masked),
-                ),
+                    re.sub(
+                        r"\\\$\$([\s\S]+?)\$\$",
+                        lambda match: f"$${match.group(1)}$$",
+                        re.sub(r"\\\$\$([\s\S]+?)\\\$\$", lambda match: f"$${match.group(1)}$$", masked),
+                    ),
+                )
             )
         )
     )

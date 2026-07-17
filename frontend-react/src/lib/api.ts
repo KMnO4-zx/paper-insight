@@ -473,7 +473,8 @@ function dispatchEvent(block: string, handlers: StreamOptions): void {
     }
 
     if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart());
+      const value = line.slice(5);
+      dataLines.push(value.startsWith(' ') ? value.slice(1) : value);
     }
   }
 

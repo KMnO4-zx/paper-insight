@@ -652,6 +652,26 @@
   .markdown-body h4 {
     margin: 1.25rem 0 0.75rem;
     color: #172033;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .markdown-body h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+
+  .markdown-body h2 {
+    font-size: 1.3rem;
+    font-weight: 700;
+  }
+
+  .markdown-body h3 {
+    font-size: 1.15rem;
+  }
+
+  .markdown-body h4 {
+    font-size: 1rem;
   }
 
   .markdown-body p,
@@ -666,6 +686,27 @@
   .markdown-body ul,
   .markdown-body ol {
     padding-left: 1.5rem;
+  }
+
+  .markdown-body ul {
+    list-style-type: disc;
+  }
+
+  .markdown-body ol {
+    list-style-type: decimal;
+  }
+
+  .markdown-body ul ul {
+    list-style-type: circle;
+  }
+
+  .markdown-body ol ol {
+    list-style-type: lower-alpha;
+  }
+
+  .markdown-body li::marker {
+    color: #f59e0b;
+    font-weight: 600;
   }
 
   .markdown-body li + li {
@@ -748,9 +789,12 @@
   }
 
   .markdown-body .katex-display {
+    max-width: 100%;
+    margin: 0.9rem 0;
     overflow-x: auto;
     overflow-y: hidden;
     padding: 0.5rem 0;
+    text-align: center;
   }
 
   .analysis-markdown h1,

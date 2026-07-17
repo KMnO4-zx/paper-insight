@@ -1847,6 +1847,7 @@ async def get_paper_analysis(paper_id: str, reanalyze: bool = False):
         await asyncio.to_thread(update_llm_response, paper_id, normalized_response)
         paper_info["llm_response"] = normalized_response
         await background_analyzer.update_code_availability(paper_info, normalized_response)
+        yield {"event": "final", "data": normalized_response}
         yield {"event": "done", "data": ""}
 
     return EventSourceResponse(generate())
@@ -1925,9 +1926,11 @@ async def chat_with_paper(
                 yield {"data": stream_chunk.content}
 
             # Persist messages
+            normalized_reply = normalize_llm_markdown("".join(chunks))
             save_chat_message(req.session_id, "user", req.message)
-            save_chat_message(req.session_id, "assistant", normalize_llm_markdown("".join(chunks)))
+            save_chat_message(req.session_id, "assistant", normalized_reply)
 
+            yield {"event": "final", "data": normalized_reply}
             yield {"event": "done", "data": ""}
         except DatabaseError:
             yield {"event": "error", "data": "数据库暂时不可用，请稍后重试"}
@@ -2037,9 +2040,11 @@ async def regenerate_chat(
                 chunks.append(stream_chunk.content)
                 yield {"data": stream_chunk.content}
 
+            normalized_reply = normalize_llm_markdown("".join(chunks))
             save_chat_message(req.session_id, "user", req.message)
-            save_chat_message(req.session_id, "assistant", "".join(chunks))
+            save_chat_message(req.session_id, "assistant", normalized_reply)
 
+            yield {"event": "final", "data": normalized_reply}
             yield {"event": "done", "data": ""}
         except DatabaseError:
             yield {"event": "error", "data": "数据库暂时不可用，请稍后重试"}

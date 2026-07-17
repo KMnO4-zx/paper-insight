@@ -185,6 +185,9 @@ export function PaperPage({ paperId }: PaperPageProps) {
               setAnalysisLoading(false);
               setAnalysisReasoning((current) => current + data);
             }
+            if (event === 'final') {
+              setAnalysisText(data);
+            }
             if (event === 'error') {
               setAnalysisLoading(false);
               setAnalysisStreaming(false);

@@ -7,6 +7,7 @@ from config import settings
 from prompt import PAPER_ANALYSIS_PROMPT
 
 MISSING_API_KEY_PLACEHOLDER = "missing-api-key"
+DEFAULT_ANALYSIS_TEMPERATURE = 0.3
 logger = logging.getLogger(__name__)
 
 
@@ -264,7 +265,7 @@ class BaseLLM:
     async def get_response(self, prompt: str, **kwargs) -> str:
         params = dict(kwargs)
         request_type = _pop_usage_context(params, "analysis")
-        params.setdefault("temperature", 1.0)
+        params.setdefault("temperature", DEFAULT_ANALYSIS_TEMPERATURE)
 
         async def _call():
             response = await self.client.chat.completions.create(
@@ -289,7 +290,7 @@ class BaseLLM:
     async def get_response_stream_events(self, prompt: str, **kwargs):
         params = dict(kwargs)
         request_type = _pop_usage_context(params, "analysis_stream")
-        params.setdefault("temperature", 1.0)
+        params.setdefault("temperature", DEFAULT_ANALYSIS_TEMPERATURE)
         response = await _create_streaming_completion(
             self.client,
             {
@@ -424,7 +425,7 @@ class ManagedLLM:
         client = self._client_for_config(config)
         params = self._parameters(config, kwargs)
         request_type = _pop_usage_context(params, "analysis")
-        params.setdefault("temperature", 1.0)
+        params.setdefault("temperature", DEFAULT_ANALYSIS_TEMPERATURE)
 
         async def _call():
             response = await client.chat.completions.create(
@@ -452,7 +453,7 @@ class ManagedLLM:
         client = self._client_for_config(config)
         params = self._parameters(config, kwargs)
         request_type = _pop_usage_context(params, "analysis_stream")
-        params.setdefault("temperature", 1.0)
+        params.setdefault("temperature", DEFAULT_ANALYSIS_TEMPERATURE)
         response = await _create_streaming_completion(
             client,
             {

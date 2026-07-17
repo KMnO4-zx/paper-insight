@@ -8,6 +8,7 @@ interface StreamingMarkdownSplit {
 }
 
 const CODE_SEGMENT_PATTERN = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;
+const SAME_LINE_BLOCK_MATH_PATTERN = /^([ \t]*)\$\$[ \t]*(\S(?:.*?\S)?)[ \t]*\$\$[ \t]*$/gm;
 
 function maskCodeSegments(content: string): { masked: string; segments: string[] } {
   const segments: string[] = [];
@@ -67,6 +68,15 @@ function normalizeBracketMath(content: string): string {
     );
 }
 
+function normalizeSameLineBlockMath(content: string): string {
+  return content.replace(
+    SAME_LINE_BLOCK_MATH_PATTERN,
+    (_, indentation: string, expression: string) => (
+      `${indentation}$$\n${indentation}${expression.trim()}\n${indentation}$$`
+    ),
+  );
+}
+
 function normalizeHeadingMarkerPrefix(line: string): string {
   return line.replace(/^([ \t]{0,3})([＃#]{1,6})(?=\s*\S)/, (_, leading, hashes: string) => (
     `${leading}${'#'.repeat(hashes.length)}`
@@ -105,9 +115,23 @@ function expandInlineHeadingLine(line: string): string[] {
 }
 
 function normalizeMarkdownLine(line: string): string {
-  return line
+  const normalizedLine = line
     .replace(/^([ \t]{0,3})\\([＃#]{1,6})(?=\s|\S)/, (_, leading, hashes: string) => `${leading}${'#'.repeat(hashes.length)}`)
-    .replace(/^(#{1,6})(\S)/, '$1 $2')
+    .replace(/^(#{1,6})(\S)/, '$1 $2');
+
+  const duplicateHeading = normalizedLine.match(
+    /^([ \t]{0,3})(#{1,6})[ \t]+#{1,6}(?:[ \t]+(.*?))?[ \t]*$/,
+  );
+  if (duplicateHeading) {
+    const [, leading, marker, title = ''] = duplicateHeading;
+    return title.trim() ? `${leading}${marker} ${title.trim()}` : '';
+  }
+
+  if (/^[ \t]{0,3}#{1,6}[ \t]*$/.test(normalizedLine)) {
+    return '';
+  }
+
+  return normalizedLine
     .replace(/^([ \t]{0,3}[-*+])(\S)/, '$1 $2')
     .replace(/^([ \t]{0,3}\d+[.)、])(\S)/, '$1 $2');
 }
@@ -271,12 +295,14 @@ export function normalizeMathContent(content: string): string {
   }
 
   const { masked, segments } = maskCodeSegments(normalizeLineEndings(content));
-  const normalized = normalizeEscapedInlineMath(
-    normalizeBracketMath(
-      masked
-        .replace(/\\\$\$([\s\S]+?)\\\$\$/g, (_, expression) => `$$${expression}$$`)
-      .replace(/\\\$\$([\s\S]+?)\$\$/g, (_, expression) => `$$${expression}$$`)
-        .replace(/\$\$([\s\S]+?)\\\$\$/g, (_, expression) => `$$${expression}$$`),
+  const normalized = normalizeSameLineBlockMath(
+    normalizeEscapedInlineMath(
+      normalizeBracketMath(
+        masked
+          .replace(/\\\$\$([\s\S]+?)\\\$\$/g, (_, expression) => `$$${expression}$$`)
+          .replace(/\\\$\$([\s\S]+?)\$\$/g, (_, expression) => `$$${expression}$$`)
+          .replace(/\$\$([\s\S]+?)\\\$\$/g, (_, expression) => `$$${expression}$$`),
+      ),
     ),
   );
 
