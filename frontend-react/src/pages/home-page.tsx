@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 
+import { PaperCirclesCanvas } from '@/components/paper-circles-canvas';
 import { SearchControls } from '@/components/search-controls';
 import { CONFERENCES } from '@/lib/constants';
 import { createArxivPaper } from '@/lib/api';
@@ -76,6 +77,9 @@ export function HomePage() {
     <div className="mx-auto -mt-4 max-w-[104rem] animate-fade-in sm:-mt-5 lg:-mt-7">
       <section className="paper-observatory relative -mx-4 overflow-hidden rounded-[2rem] px-4 pb-8 pt-8 shadow-[0_30px_120px_rgba(15,23,42,0.18)] ring-1 ring-white/70 sm:-mx-6 sm:rounded-[3rem] sm:px-8 sm:pb-10 sm:pt-10 lg:-mx-8 lg:min-h-[calc(100vh-9rem)] lg:px-12 xl:px-16">
         <div className="paper-grid-layer" />
+        <div className="paper-circles-layer">
+          <PaperCirclesCanvas />
+        </div>
         <div className="paper-scan-layer" />
         <div className="paper-light-rail paper-light-rail-a" />
         <div className="paper-light-rail paper-light-rail-b" />
