@@ -1,5 +1,9 @@
 import type {
   ActiveLlmModel,
+  AdminApiSearchSettings,
+  AdminApiSearchUser,
+  AdminApiSearchUserPatch,
+  AdminApiSearchUsersResponse,
   AdminBackgroundTasksResponse,
   AdminLlmFetchModelsResponse,
   AdminLlmProvider,
@@ -16,6 +20,8 @@ import type {
   FeishuWebhookSettingsPayload,
   FeishuWebhookTestResponse,
   MarkedPaperListResponse,
+  MyApiKeyCreatedResponse,
+  MyApiKeyResponse,
   MyPaperFilter,
   MyPaperSort,
   OnlineCount,
@@ -313,6 +319,49 @@ export async function updateFeishuWebhookSettings(
 
 export async function testFeishuWebhook(): Promise<FeishuWebhookTestResponse> {
   return apiFetch<FeishuWebhookTestResponse>('/me/feishu-webhook/test', { method: 'POST' });
+}
+
+export async function fetchMyApiKey(): Promise<MyApiKeyResponse> {
+  return apiFetch<MyApiKeyResponse>('/me/api-key');
+}
+
+export async function createMyApiKey(): Promise<MyApiKeyCreatedResponse> {
+  return apiFetch<MyApiKeyCreatedResponse>('/me/api-key', { method: 'POST' });
+}
+
+export async function disableMyApiKey(): Promise<MyApiKeyResponse> {
+  return apiFetch<MyApiKeyResponse>('/me/api-key/disable', { method: 'POST' });
+}
+
+export async function fetchAdminApiSearchUsers(
+  page: number,
+  search: string,
+): Promise<AdminApiSearchUsersResponse> {
+  const params = new URLSearchParams({ page: String(page), limit: '10' });
+  if (search.trim()) {
+    params.set('search', search.trim());
+  }
+  return apiFetch<AdminApiSearchUsersResponse>(`/admin/api-search/users?${params.toString()}`);
+}
+
+export async function updateAdminApiSearchSettings(
+  payload: AdminApiSearchSettings,
+): Promise<AdminApiSearchSettings> {
+  const body = await apiFetch<{ defaults: AdminApiSearchSettings }>('/admin/api-search/settings', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return body.defaults;
+}
+
+export async function updateAdminApiSearchUser(
+  userId: string,
+  patch: AdminApiSearchUserPatch,
+): Promise<AdminApiSearchUser> {
+  return apiFetch<AdminApiSearchUser>(`/admin/api-search/users/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
 }
 
 export async function updatePaperMark(

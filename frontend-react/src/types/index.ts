@@ -243,6 +243,64 @@ export type AdminUserSortBy = 'online' | 'created_at' | 'last_login_at';
 
 export type SortDirection = 'asc' | 'desc';
 
+export interface ApiKeyUsage {
+  today_used: number;
+  daily_limit: number;
+  rpm_limit: number;
+}
+
+export interface ApiKeyStatus {
+  key_hint: string;
+  status: 'active' | 'disabled' | 'revoked';
+  created_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface MyApiKeyResponse {
+  api_key: ApiKeyStatus | null;
+  usage: ApiKeyUsage;
+}
+
+export interface MyApiKeyCreatedResponse {
+  api_key: (ApiKeyStatus & { key: string }) | null;
+  usage: ApiKeyUsage;
+}
+
+export interface AdminApiSearchUser {
+  id: string;
+  email: string;
+  role: 'user' | 'admin';
+  is_active: boolean;
+  key_hint: string | null;
+  key_status: 'active' | 'disabled' | null;
+  key_created_at: string | null;
+  key_last_used_at: string | null;
+  rpm_limit: number | null;
+  daily_limit: number | null;
+  effective_rpm_limit: number;
+  effective_daily_limit: number;
+  today_used: number;
+}
+
+export interface AdminApiSearchSettings {
+  default_rpm_limit: number;
+  default_daily_limit: number;
+}
+
+export interface AdminApiSearchUsersResponse {
+  users: AdminApiSearchUser[];
+  total: number;
+  page: number;
+  pages: number;
+  defaults: AdminApiSearchSettings;
+}
+
+export interface AdminApiSearchUserPatch {
+  rpm_limit?: number | null;
+  daily_limit?: number | null;
+  key_status?: 'active' | 'disabled';
+}
+
 export interface OnlineTrendPoint {
   bucket_at: string;
   count: number;

@@ -3,6 +3,7 @@ import { Bell, Bookmark, BookMarked, ChevronLeft, Eye, Heart, Loader2, Send } fr
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ApiKeyPanel } from '@/components/api-key-panel';
 import { PaginationBar } from '@/components/pagination-bar';
 import { ReadingOverviewPanel } from '@/components/reading-overview';
 import { RichContent } from '@/components/rich-content';
@@ -433,7 +434,7 @@ export function ProfilePage() {
         </div>
       </section>
 
-      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:mx-0 xl:max-h-[calc(100dvh-8rem)] xl:max-w-none xl:self-start xl:overflow-y-auto xl:overscroll-contain">
+      <div className="mx-auto w-full max-w-sm xl:sticky xl:top-28 xl:col-start-2 xl:row-start-1 xl:row-span-3 xl:mx-0 xl:max-h-[calc(100dvh-8rem)] xl:max-w-none xl:self-start xl:overflow-y-auto xl:overscroll-contain">
         <ReadingOverviewPanel
           overview={readingOverview.overview}
           isLoading={readingOverview.isLoading}
@@ -443,7 +444,11 @@ export function ProfilePage() {
         />
       </div>
 
-      <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+      <div className="xl:col-start-1 xl:row-start-2">
+        <ApiKeyPanel />
+      </div>
+
+      <div className="min-w-0 xl:col-start-1 xl:row-start-3">
 
       <section className="rounded-[28px] bg-white/80 p-4 shadow-sm ring-1 ring-black/5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
