@@ -31,6 +31,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { AdminApiSearchSection } from '@/components/admin-api-search-section';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1646,6 +1647,8 @@ export function AdminPage() {
           )}
         </div>
       </section>
+
+      <AdminApiSearchSection />
 
       <section className="rounded-[32px] bg-white p-6 shadow-sm ring-1 ring-black/5">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
