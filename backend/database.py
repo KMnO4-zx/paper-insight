@@ -4201,3 +4201,379 @@ def get_presence_trend(range_name: str) -> list[dict]:
         ]
 
     return _run_with_retry(operation, f"get_presence_trend:{range_name}")
+
+
+# ---------------------------------------------------------------------------
+# External paper search API (V1): keys, quotas, daily usage.
+# ---------------------------------------------------------------------------
+
+def _normalize_api_key_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    normalized = dict(row)
+    normalized["id"] = str(normalized["id"])
+    normalized["user_id"] = str(normalized["user_id"])
+    return normalized
+
+
+def create_api_key(user_id: str, key_hash: str, key_hint: str) -> dict:
+    """Create a fresh active key for the user, revoking any previous one.
+
+    Runs in a single transaction so the old key is invalid the moment the
+    new one exists.
+    """
+
+    def operation() -> dict:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE api_keys
+                    SET status = 'revoked', revoked_at = NOW()
+                    WHERE user_id = %s AND status = 'active'
+                    """,
+                    (user_id,),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO api_keys (user_id, key_hash, key_hint)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, user_id, key_hint, status, created_at, last_used_at
+                    """,
+                    (user_id, key_hash, key_hint),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _normalize_api_key_row(row)
+
+    return _run_with_retry(operation, f"create_api_key:{user_id}")
+
+
+def get_api_key_owner_by_hash(key_hash: str) -> dict | None:
+    """Resolve an active key to its owner. Only active keys of active users match."""
+
+    def operation() -> dict | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT k.id, k.user_id
+                    FROM api_keys k
+                    JOIN users u ON u.id = k.user_id
+                    WHERE k.key_hash = %s
+                      AND k.status = 'active'
+                      AND u.is_active = TRUE
+                    """,
+                    (key_hash,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": str(row["id"]), "user_id": str(row["user_id"])}
+
+    return _run_with_retry(operation, "get_api_key_owner_by_hash")
+
+
+def get_user_api_key(user_id: str) -> dict | None:
+    """Current non-revoked key for the user (active or disabled), for display."""
+
+    def operation() -> dict | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, user_id, key_hint, status, created_at, last_used_at
+                    FROM api_keys
+                    WHERE user_id = %s AND status <> 'revoked'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return _normalize_api_key_row(row)
+
+    return _run_with_retry(operation, f"get_user_api_key:{user_id}")
+
+
+def set_api_key_status(user_id: str, status: str) -> dict | None:
+    """Enable/disable the user's current non-revoked key."""
+
+    def operation() -> dict | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE api_keys
+                    SET status = %s
+                    WHERE id = (
+                      SELECT id FROM api_keys
+                      WHERE user_id = %s AND status <> 'revoked'
+                      ORDER BY created_at DESC
+                      LIMIT 1
+                    )
+                    RETURNING id, user_id, key_hint, status, created_at, last_used_at
+                    """,
+                    (status, user_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _normalize_api_key_row(row)
+
+    return _run_with_retry(operation, f"set_api_key_status:{user_id}:{status}")
+
+
+def get_user_api_quota(user_id: str) -> dict | None:
+    def operation() -> dict | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT user_id, rpm_limit, daily_limit
+                    FROM user_api_quotas
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "user_id": str(row["user_id"]),
+            "rpm_limit": row["rpm_limit"],
+            "daily_limit": row["daily_limit"],
+        }
+
+    return _run_with_retry(operation, f"get_user_api_quota:{user_id}")
+
+
+def set_user_api_quota(user_id: str, rpm_limit: int | None, daily_limit: int | None) -> dict:
+    """Upsert the user's quota overrides; None means follow the global default."""
+
+    def operation() -> dict:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                if rpm_limit is None and daily_limit is None:
+                    cur.execute("DELETE FROM user_api_quotas WHERE user_id = %s", (user_id,))
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO user_api_quotas (user_id, rpm_limit, daily_limit)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (user_id) DO UPDATE
+                          SET rpm_limit = EXCLUDED.rpm_limit,
+                              daily_limit = EXCLUDED.daily_limit,
+                              updated_at = NOW()
+                        """,
+                        (user_id, rpm_limit, daily_limit),
+                    )
+            conn.commit()
+        return {
+            "user_id": user_id,
+            "rpm_limit": rpm_limit,
+            "daily_limit": daily_limit,
+        }
+
+    return _run_with_retry(operation, f"set_user_api_quota:{user_id}")
+
+
+def reserve_api_search_usage(user_id: str, usage_date: date, daily_limit: int, key_id: str) -> int | None:
+    """Atomically count one search against today's quota.
+
+    Returns the new count, or None when the user is already at the daily
+    limit (the guard makes the check-and-increment race-free). Also stamps
+    the key's last_used_at.
+    """
+
+    def operation() -> int | None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO api_usage_daily (user_id, usage_date, search_count)
+                    VALUES (%s, %s, 1)
+                    ON CONFLICT (user_id, usage_date) DO UPDATE
+                      SET search_count = api_usage_daily.search_count + 1,
+                          updated_at = NOW()
+                      WHERE api_usage_daily.search_count < %s
+                    RETURNING search_count
+                    """,
+                    (user_id, usage_date, daily_limit),
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    cur.execute(
+                        "UPDATE api_keys SET last_used_at = NOW() WHERE id = %s",
+                        (key_id,),
+                    )
+            conn.commit()
+            if row is None:
+                return None
+            return int(row["search_count"])
+
+    return _run_with_retry(operation, f"reserve_api_search_usage:{user_id}:{usage_date.isoformat()}")
+
+
+def release_api_search_usage(user_id: str, usage_date: date) -> None:
+    """Refund one usage unit after a failed (5xx) search so it stays uncounted."""
+
+    def operation() -> None:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE api_usage_daily
+                    SET search_count = GREATEST(search_count - 1, 0), updated_at = NOW()
+                    WHERE user_id = %s AND usage_date = %s
+                    """,
+                    (user_id, usage_date),
+                )
+            conn.commit()
+
+    _run_with_retry(operation, f"release_api_search_usage:{user_id}:{usage_date.isoformat()}")
+
+
+def get_api_search_usage(user_id: str, usage_date: date) -> int:
+    def operation() -> int:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT search_count
+                    FROM api_usage_daily
+                    WHERE user_id = %s AND usage_date = %s
+                    """,
+                    (user_id, usage_date),
+                )
+                row = cur.fetchone()
+        return int(row["search_count"] or 0) if row else 0
+
+    return _run_with_retry(operation, f"get_api_search_usage:{user_id}:{usage_date.isoformat()}")
+
+
+def list_api_search_users(
+    search: str | None,
+    offset: int,
+    limit: int,
+    usage_date: date,
+    user_id: str | None = None,
+) -> tuple[list[dict], int]:
+    """Admin listing: every user with their key state, overrides, and today's usage.
+
+    ``user_id`` narrows the listing to a single account (used to refresh one
+    row after an admin edit).
+    """
+
+    def operation() -> tuple[list[dict], int]:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM users u
+                    WHERE (%s::text IS NULL OR u.email ILIKE '%%' || %s || '%%')
+                      AND (%s::uuid IS NULL OR u.id = %s)
+                    """,
+                    (search, search, user_id, user_id),
+                )
+                total = int(cur.fetchone()["total"] or 0)
+
+                cur.execute(
+                    """
+                    WITH latest_keys AS (
+                      SELECT DISTINCT ON (user_id)
+                        user_id, key_hint, status, created_at, last_used_at
+                      FROM api_keys
+                      WHERE status <> 'revoked'
+                      ORDER BY user_id, created_at DESC
+                    )
+                    SELECT
+                      u.id, u.email, u.role, u.is_active,
+                      lk.key_hint AS key_hint,
+                      lk.status AS key_status,
+                      lk.created_at AS key_created_at,
+                      lk.last_used_at AS key_last_used_at,
+                      q.rpm_limit AS rpm_limit,
+                      q.daily_limit AS daily_limit,
+                      COALESCE(d.search_count, 0) AS today_used
+                    FROM users u
+                    LEFT JOIN latest_keys lk ON lk.user_id = u.id
+                    LEFT JOIN user_api_quotas q ON q.user_id = u.id
+                    LEFT JOIN api_usage_daily d
+                      ON d.user_id = u.id AND d.usage_date = %s
+                    WHERE (%s::text IS NULL OR u.email ILIKE '%%' || %s || '%%')
+                      AND (%s::uuid IS NULL OR u.id = %s)
+                    ORDER BY
+                      lk.last_used_at DESC NULLS LAST,
+                      u.created_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (usage_date, search, search, user_id, user_id, limit, offset),
+                )
+                rows = cur.fetchall()
+
+        users = [
+            {
+                "id": str(row["id"]),
+                "email": row["email"],
+                "role": row["role"],
+                "is_active": row["is_active"],
+                "key_hint": row["key_hint"],
+                "key_status": row["key_status"],
+                "key_created_at": row["key_created_at"],
+                "key_last_used_at": row["key_last_used_at"],
+                "rpm_limit": row["rpm_limit"],
+                "daily_limit": row["daily_limit"],
+                "today_used": int(row["today_used"] or 0),
+            }
+            for row in rows
+        ]
+        return users, total
+
+    return _run_with_retry(operation, "list_api_search_users")
+
+
+def api_search_papers(
+    search: str,
+    venue_prefix: str | None,
+    code_filter: str,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict], int]:
+    """Run the API search via the minimal-column SQL function.
+
+    Ranking mirrors the site's search_papers_optimized exactly, so results
+    match the website; authors/keywords arrive pre-aggregated from SQL.
+    """
+
+    def operation() -> tuple[list[dict], int]:
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, title, abstract, venue, code_status, authors, keywords
+                    FROM search_papers_api(%s, %s, %s, %s, %s)
+                    """,
+                    (search, venue_prefix, code_filter, limit, offset),
+                )
+                rows = cur.fetchall()
+                cur.execute(
+                    "SELECT count_papers_optimized(%s, %s, TRUE, TRUE, TRUE, %s) AS total",
+                    (search, venue_prefix, code_filter),
+                )
+                total = int(cur.fetchone()["total"] or 0)
+        papers = [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "abstract": row["abstract"],
+                "venue": row["venue"],
+                "code_status": row["code_status"] or "unknown",
+                "authors": list(row["authors"] or []),
+                "keywords": list(row["keywords"] or []),
+            }
+            for row in rows
+        ]
+        return papers, total
+
+    return _run_with_retry(operation, f"api_search_papers:{search}")

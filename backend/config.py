@@ -53,6 +53,12 @@ class FeishuNotificationsConfig:
 
 
 @dataclass(frozen=True)
+class ApiSearchConfig:
+    default_rpm_limit: int = 20
+    default_daily_limit: int = 1000
+
+
+@dataclass(frozen=True)
 class CorsConfig:
     allowed_origins: tuple[str, ...] = ("http://127.0.0.1:5173", "http://localhost:5173")
 
@@ -102,6 +108,7 @@ class AppConfig:
     background_analysis: BackgroundAnalysisConfig
     hf_daily: HfDailyConfig
     feishu_notifications: FeishuNotificationsConfig
+    api_search: ApiSearchConfig
     cors: CorsConfig
 
 
@@ -152,6 +159,7 @@ def load_app_config() -> AppConfig:
     raw_background_analysis = raw.get("background_analysis") if isinstance(raw.get("background_analysis"), dict) else {}
     raw_hf_daily = raw.get("hf_daily") if isinstance(raw.get("hf_daily"), dict) else {}
     raw_feishu_notifications = raw.get("feishu_notifications") if isinstance(raw.get("feishu_notifications"), dict) else {}
+    raw_api_search = raw.get("api_search") if isinstance(raw.get("api_search"), dict) else {}
     raw_cors = raw.get("cors") if isinstance(raw.get("cors"), dict) else {}
     raw_database = raw.get("database") if isinstance(raw.get("database"), dict) else {}
     raw_llm = raw.get("llm") if isinstance(raw.get("llm"), dict) else {}
@@ -262,6 +270,18 @@ def load_app_config() -> AppConfig:
         ),
     )
 
+    default_api_search = ApiSearchConfig()
+    api_search = ApiSearchConfig(
+        default_rpm_limit=_as_int(
+            raw_api_search.get("default_rpm_limit"),
+            default_api_search.default_rpm_limit,
+        ),
+        default_daily_limit=_as_int(
+            raw_api_search.get("default_daily_limit"),
+            default_api_search.default_daily_limit,
+        ),
+    )
+
     default_cors = CorsConfig()
     cors = CorsConfig(
         allowed_origins=_as_origins(raw_cors.get("allowed_origins"), default_cors.allowed_origins),
@@ -292,6 +312,7 @@ def load_app_config() -> AppConfig:
         background_analysis=background_analysis,
         hf_daily=hf_daily,
         feishu_notifications=feishu_notifications,
+        api_search=api_search,
         cors=cors,
     )
 
@@ -307,6 +328,21 @@ def write_background_analysis_config(enabled: bool, check_interval_seconds: int)
         f"  check_interval_seconds: {check_interval_seconds}",
     ]
 
+    _write_yaml_section("background_analysis", section_lines, insert_before="hf_daily:")
+
+
+def write_api_search_config(default_rpm_limit: int, default_daily_limit: int) -> None:
+    section_lines = [
+        "api_search:",
+        "  # Default quotas for the external paper search API.",
+        f"  default_rpm_limit: {default_rpm_limit}",
+        f"  default_daily_limit: {default_daily_limit}",
+    ]
+
+    _write_yaml_section("api_search", section_lines, insert_before="hf_daily:")
+
+
+def _write_yaml_section(section_name: str, section_lines: list[str], insert_before: str) -> None:
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text("\n".join(section_lines) + "\n", encoding="utf-8")
         return
@@ -316,7 +352,7 @@ def write_background_analysis_config(enabled: bool, check_interval_seconds: int)
         (
             index
             for index, line in enumerate(lines)
-            if line.strip() == "background_analysis:" and line == line.lstrip()
+            if line.strip() == f"{section_name}:" and line == line.lstrip()
         ),
         None,
     )
@@ -339,7 +375,7 @@ def write_background_analysis_config(enabled: bool, check_interval_seconds: int)
             (
                 index
                 for index, line in enumerate(lines)
-                if line.strip() == "hf_daily:" and line == line.lstrip()
+                if line.strip() == insert_before and line == line.lstrip()
             ),
             len(lines),
         )

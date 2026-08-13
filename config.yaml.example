@@ -53,6 +53,11 @@ background_analysis:
   enabled: false
   check_interval_seconds: 86400
 
+api_search:
+  # Default quotas for the external paper search API (per-user overrides live in the database).
+  default_rpm_limit: 20
+  default_daily_limit: 1000
+
 hf_daily:
   enabled: true
   api_url: https://huggingface.co/api/daily_papers

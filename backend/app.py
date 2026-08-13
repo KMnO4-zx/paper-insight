@@ -24,9 +24,20 @@ from auth import (
     password_needs_rehash,
     verify_password,
 )
-from config import settings, write_background_analysis_config
+from config import settings, write_background_analysis_config, write_api_search_config
 from llm import ManagedLLM, fetch_openai_compatible_model_names
 from migrations import apply_migrations
+from api_search import (
+    api_rate_limiter,
+    apply_default_limits,
+    build_key_hint,
+    daily_usage_today,
+    effective_limits,
+    generate_api_key,
+    get_default_limits,
+    hash_api_key,
+    seconds_until_daily_reset,
+)
 from analysis_context import build_analysis_prompt, build_chat_context_parts
 from github_oauth import (
     GITHUB_AUTHORIZE_URL,
@@ -53,6 +64,7 @@ from feishu import (
 )
 from database import (
     DatabaseError,
+    api_search_papers,
     count_arxiv_paper_read_states,
     count_active_admins,
     count_hf_daily_paper_read_states,
@@ -64,6 +76,7 @@ from database import (
     count_unchecked_code_availability,
     count_unchecked_keyword_enrichment,
     count_unanalyzed_papers,
+    create_api_key,
     create_chat_session,
     create_or_link_github_user,
     create_user_session,
@@ -73,6 +86,8 @@ from database import (
     ensure_admin_user,
     ensure_default_llm_providers,
     add_llm_model,
+    get_api_key_owner_by_hash,
+    get_api_search_usage,
     get_chat_messages,
     get_chat_session,
     get_chat_sessions_for_account,
@@ -88,11 +103,14 @@ from database import (
     get_reading_overview,
     get_presence_counts,
     get_presence_trend,
+    get_user_api_key,
+    get_user_api_quota,
     get_user_by_email,
     get_user_by_id,
     get_user_by_session_token_hash,
     has_hf_daily_papers_for_date,
     has_successful_feishu_push,
+    list_api_search_users,
     list_enabled_feishu_settings,
     list_marked_papers,
     list_llm_providers,
@@ -101,14 +119,18 @@ from database import (
     record_presence,
     record_feishu_push_result,
     record_presence_snapshot,
+    release_api_search_usage,
+    reserve_api_search_usage,
     revoke_session,
     revoke_user_sessions,
     save_chat_message,
     save_paper,
     search_all_papers,
     select_daily_push_papers_for_user,
+    set_api_key_status,
     set_paper_mark,
     set_active_llm_provider,
+    set_user_api_quota,
     create_llm_provider,
     update_feishu_test_result,
     update_llm_response,
@@ -803,6 +825,18 @@ class LlmActiveRequest(BaseModel):
     model_name: str | None = None
 
 
+class AdminApiSearchSettingsRequest(BaseModel):
+    default_rpm_limit: int
+    default_daily_limit: int
+
+
+class AdminApiSearchUserUpdateRequest(BaseModel):
+    # Explicit null (model_fields_set) clears an override back to the global default.
+    rpm_limit: int | None = None
+    daily_limit: int | None = None
+    key_status: str | None = None
+
+
 def validate_read_status(read_status: str) -> str:
     if read_status not in {"all", "unread", "read"}:
         raise HTTPException(status_code=400, detail="read_status must be all, unread, or read")
@@ -1382,6 +1416,61 @@ async def update_my_paper_mark(
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
 
 
+def build_my_api_key_payload(user_id: str) -> dict:
+    """Current key state + effective quotas for the 我的论文 page."""
+    key = get_user_api_key(user_id)
+    quota = get_user_api_quota(user_id)
+    rpm_limit, daily_limit = effective_limits(quota)
+    today_used = get_api_search_usage(user_id, daily_usage_today().date())
+    return {
+        "api_key": (
+            {
+                "key_hint": key["key_hint"],
+                "status": key["status"],
+                "created_at": key["created_at"],
+                "last_used_at": key["last_used_at"],
+            }
+            if key
+            else None
+        ),
+        "usage": {
+            "today_used": today_used,
+            "daily_limit": daily_limit,
+            "rpm_limit": rpm_limit,
+        },
+    }
+
+
+@app.get("/me/api-key")
+async def get_my_api_key(user: dict = Depends(require_current_user)):
+    try:
+        return build_my_api_key_payload(user["id"])
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+@app.post("/me/api-key")
+async def create_my_api_key(user: dict = Depends(require_current_user)):
+    """Create or regenerate the user's key. The full key is returned exactly once."""
+    raw_key = generate_api_key()
+    try:
+        create_api_key(user["id"], hash_api_key(raw_key), build_key_hint(raw_key))
+        payload = build_my_api_key_payload(user["id"])
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+    payload["api_key"]["key"] = raw_key
+    return payload
+
+
+@app.post("/me/api-key/disable")
+async def disable_my_api_key(user: dict = Depends(require_current_user)):
+    try:
+        set_api_key_status(user["id"], "disabled")
+        return build_my_api_key_payload(user["id"])
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
 @app.get("/admin/metrics/online")
 async def admin_online_metrics(range: str = "24h", admin: dict = Depends(require_admin_user)):
     if range not in {"24h", "7d"}:
@@ -1673,6 +1762,114 @@ async def admin_delete_user(
         if not delete_user(user_id):
             raise HTTPException(status_code=404, detail="用户不存在")
         return {"ok": True}
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+
+API_SEARCH_MAX_RPM_LIMIT = 10_000
+API_SEARCH_MAX_DAILY_LIMIT = 1_000_000
+
+
+def _api_search_defaults_payload() -> dict:
+    rpm_limit, daily_limit = get_default_limits()
+    return {"default_rpm_limit": rpm_limit, "default_daily_limit": daily_limit}
+
+
+def _with_effective_api_limits(user: dict) -> dict:
+    rpm_limit, daily_limit = effective_limits(
+        {"rpm_limit": user.get("rpm_limit"), "daily_limit": user.get("daily_limit")}
+    )
+    user["effective_rpm_limit"] = rpm_limit
+    user["effective_daily_limit"] = daily_limit
+    return user
+
+
+@app.get("/admin/api-search/settings")
+async def admin_get_api_search_settings(admin: dict = Depends(require_admin_user)):
+    return {"defaults": _api_search_defaults_payload()}
+
+
+@app.put("/admin/api-search/settings")
+async def admin_update_api_search_settings(
+    req: AdminApiSearchSettingsRequest,
+    admin: dict = Depends(require_admin_user),
+):
+    if not 1 <= req.default_rpm_limit <= API_SEARCH_MAX_RPM_LIMIT:
+        raise HTTPException(status_code=400, detail=f"default_rpm_limit 必须在 1 到 {API_SEARCH_MAX_RPM_LIMIT} 之间")
+    if not 1 <= req.default_daily_limit <= API_SEARCH_MAX_DAILY_LIMIT:
+        raise HTTPException(status_code=400, detail=f"default_daily_limit 必须在 1 到 {API_SEARCH_MAX_DAILY_LIMIT} 之间")
+
+    try:
+        await asyncio.to_thread(write_api_search_config, req.default_rpm_limit, req.default_daily_limit)
+    except OSError as exc:
+        logger.warning("搜索 API 默认额度写入失败: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to update config.yaml") from exc
+    apply_default_limits(req.default_rpm_limit, req.default_daily_limit)
+    return {"defaults": _api_search_defaults_payload()}
+
+
+@app.get("/admin/api-search/users")
+async def admin_list_api_search_users(
+    search: str = "",
+    page: int = 1,
+    limit: int = 10,
+    admin: dict = Depends(require_admin_user),
+):
+    safe_page = max(page, 1)
+    safe_limit = min(max(limit, 1), 100)
+    offset = (safe_page - 1) * safe_limit
+    try:
+        users, total = await asyncio.to_thread(
+            list_api_search_users,
+            search.strip() or None,
+            offset,
+            safe_limit,
+            daily_usage_today().date(),
+        )
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+    return {
+        "users": [_with_effective_api_limits(user) for user in users],
+        "total": total,
+        "page": safe_page,
+        "pages": math.ceil(total / safe_limit) if total > 0 else 1,
+        "defaults": _api_search_defaults_payload(),
+    }
+
+
+@app.patch("/admin/api-search/users/{user_id}")
+async def admin_update_api_search_user(
+    user_id: str,
+    req: AdminApiSearchUserUpdateRequest,
+    admin: dict = Depends(require_admin_user),
+):
+    provided = req.model_fields_set
+    if "rpm_limit" in provided and req.rpm_limit is not None and not 1 <= req.rpm_limit <= API_SEARCH_MAX_RPM_LIMIT:
+        raise HTTPException(status_code=400, detail=f"rpm_limit 必须在 1 到 {API_SEARCH_MAX_RPM_LIMIT} 之间")
+    if "daily_limit" in provided and req.daily_limit is not None and not 1 <= req.daily_limit <= API_SEARCH_MAX_DAILY_LIMIT:
+        raise HTTPException(status_code=400, detail=f"daily_limit 必须在 1 到 {API_SEARCH_MAX_DAILY_LIMIT} 之间")
+    if req.key_status is not None and req.key_status not in {"active", "disabled"}:
+        raise HTTPException(status_code=400, detail="key_status 仅支持 active 或 disabled")
+
+    try:
+        if not get_user_by_id(user_id):
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+        if "rpm_limit" in provided or "daily_limit" in provided:
+            # Merge with the existing override so a partial PATCH keeps the other column.
+            current = get_user_api_quota(user_id) or {}
+            next_rpm = req.rpm_limit if "rpm_limit" in provided else current.get("rpm_limit")
+            next_daily = req.daily_limit if "daily_limit" in provided else current.get("daily_limit")
+            set_user_api_quota(user_id, next_rpm, next_daily)
+
+        if req.key_status is not None and not set_api_key_status(user_id, req.key_status):
+            raise HTTPException(status_code=400, detail="该用户没有可启用的 API Key")
+
+        refreshed, _total = await asyncio.to_thread(
+            list_api_search_users, None, 0, 1, daily_usage_today().date(), user_id
+        )
+        return _with_effective_api_limits(refreshed[0]) if refreshed else {"ok": True}
     except DatabaseError as exc:
         raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
 
@@ -2065,15 +2262,7 @@ async def get_conference_papers_endpoint(
     read_status: str = "all",
     code_status: str = "all",
 ):
-    venue_map = {
-        "neurips_2025": "NeurIPS 2025",
-        "iclr_2026": "ICLR 2026",
-        "acl_2026": "ACL 2026",
-        "icml_2025": "ICML 2025",
-        "chi_2026": "CHI 2026",
-        "cvpr_2026": "CVPR 2026",
-    }
-    venue_name = venue_map.get(venue)
+    venue_name = CONFERENCE_VENUE_MAP.get(venue)
     if not venue_name:
         raise HTTPException(status_code=404, detail="Conference not found")
 
@@ -2283,6 +2472,136 @@ async def search_all_papers_endpoint(
     }
 
 
+CONFERENCE_VENUE_MAP = {
+    "neurips_2025": "NeurIPS 2025",
+    "iclr_2026": "ICLR 2026",
+    "acl_2026": "ACL 2026",
+    "icml_2025": "ICML 2025",
+    "chi_2026": "CHI 2026",
+    "cvpr_2026": "CVPR 2026",
+}
+
+
+def extract_bearer_api_key(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "")
+    if not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization[7:].strip()
+    return token or None
+
+
+def build_paper_detail_url(request: Request, paper_id: str) -> str:
+    base_url = (settings.auth.frontend_base_url or "").strip().rstrip("/")
+    if not base_url:
+        base_url = str(request.base_url).rstrip("/")
+    return f"{base_url}/papers/{paper_id}"
+
+
+@app.get("/api/v1/papers/search")
+async def api_v1_papers_search(
+    request: Request,
+    q: str = "",
+    venue: str = "all",
+    code_status: str = "all",
+    page: int = 1,
+    limit: int = 10,
+):
+    """External paper search API (PRD V1). Bearer-key auth + RPM/daily quotas.
+
+    Counting rules (PRD): only valid, executed searches count toward the
+    daily quota — invalid keys, bad params, rate-blocked and 5xx requests
+    never do.
+    """
+    # 1) Key authentication.
+    raw_key = extract_bearer_api_key(request)
+    if not raw_key:
+        raise HTTPException(
+            status_code=401,
+            detail="缺少有效的 Authorization 请求头，格式为：Authorization: Bearer <API Key>",
+        )
+    try:
+        owner = get_api_key_owner_by_hash(hash_api_key(raw_key))
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+    if not owner:
+        raise HTTPException(status_code=401, detail="无效的 API Key")
+
+    # 2) Parameter validation.
+    search_term = q.strip()
+    if not search_term:
+        raise HTTPException(status_code=400, detail="q 不能为空")
+    if len(search_term) > 256:
+        raise HTTPException(status_code=400, detail="q 最长 256 个字符")
+    if venue != "all" and venue not in CONFERENCE_VENUE_MAP:
+        allowed = ", ".join(["all", *CONFERENCE_VENUE_MAP])
+        raise HTTPException(status_code=400, detail=f"不支持的 venue，可选值：{allowed}")
+    if code_status not in {"all", "open_source", "not_open_source"}:
+        raise HTTPException(status_code=400, detail="code_status 仅支持 all、open_source 或 not_open_source")
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page 必须大于等于 1")
+    if not 1 <= limit <= 100:
+        raise HTTPException(status_code=400, detail="limit 必须在 1 到 100 之间")
+
+    user_id = owner["user_id"]
+    key_id = owner["id"]
+
+    # 3) Resolve quotas (per-user override > global default).
+    try:
+        quota = get_user_api_quota(user_id)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+    rpm_limit, daily_limit = effective_limits(quota)
+
+    # 4) RPM limit (in-process sliding window, see backend/api_search.py).
+    if not api_rate_limiter.check_and_record(user_id, rpm_limit):
+        raise HTTPException(
+            status_code=429,
+            detail="请求太频繁，请稍后再试。",
+            headers={"Retry-After": str(api_rate_limiter.retry_after(user_id))},
+        )
+
+    # 5) Daily quota: atomic reserve, also stamps the key's last_used_at.
+    usage_date = daily_usage_today().date()
+    try:
+        today_used = await asyncio.to_thread(
+            reserve_api_search_usage, user_id, usage_date, daily_limit, key_id
+        )
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+    if today_used is None:
+        raise HTTPException(
+            status_code=429,
+            detail="今天的 API 搜索额度已经用完。",
+            headers={"Retry-After": str(seconds_until_daily_reset())},
+        )
+
+    # 6) Execute the search.
+    venue_name = CONFERENCE_VENUE_MAP.get(venue) if venue != "all" else None
+    offset = (page - 1) * limit
+    try:
+        papers, total = await asyncio.to_thread(
+            api_search_papers, search_term, venue_name, code_status, limit, offset
+        )
+    except DatabaseError as exc:
+        try:
+            await asyncio.to_thread(release_api_search_usage, user_id, usage_date)
+        except DatabaseError:
+            logger.warning("无法退还 API 搜索用量: user=%s date=%s", user_id, usage_date)
+        raise HTTPException(status_code=502, detail="Database temporarily unavailable") from exc
+
+    return {
+        "papers": [{**paper, "url": build_paper_detail_url(request, paper["id"])} for paper in papers],
+        "total": total,
+        "page": page,
+        "pages": math.ceil(total / limit) if total > 0 else 1,
+        "usage": {
+            "today_used": today_used,
+            "daily_limit": daily_limit,
+            "rpm_limit": rpm_limit,
+        },
+    }
+
+
 # 静态文件服务
 REACT_FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend-react" / "dist"
 IMAGES_DIR = Path(__file__).parent.parent / "images"
@@ -2299,53 +2618,59 @@ def get_frontend_index() -> Path:
     )
 
 
+# The SPA entry must always revalidate: it references content-hashed asset
+# URLs, so a heuristically cached copy would pin users to an old build after
+# a deploy. Hashed assets under /assets keep their long cache lifetime.
+FRONTEND_INDEX_HEADERS = {"Cache-Control": "no-cache"}
+
+
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/assets", StaticFiles(directory=REACT_FRONTEND_DIST_DIR / "assets", check_dir=False), name="assets")
 
 
 @app.get("/")
 async def serve_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/search")
 async def serve_search_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/login")
 async def serve_login_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/register")
 async def serve_register_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/admin")
 async def serve_admin_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/me")
 async def serve_me_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/hf-daily")
 async def serve_hf_daily_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/arxiv")
 async def serve_arxiv_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/changelog")
 async def serve_changelog_frontend():
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/changelog.md")
@@ -2357,9 +2682,9 @@ async def get_changelog_markdown():
 
 @app.get("/conference/{venue}")
 async def serve_conference_frontend(venue: str):
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
 
 
 @app.get("/papers/{paper_id}")
 async def serve_paper_frontend(paper_id: str):
-    return FileResponse(get_frontend_index())
+    return FileResponse(get_frontend_index(), headers=FRONTEND_INDEX_HEADERS)
